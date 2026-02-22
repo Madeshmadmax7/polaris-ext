@@ -19,6 +19,15 @@ import { blockDomain, unblockDomain, syncBlockedDomains } from '../blocking/dyna
 
 
 // ═══════════════════════════════════════════════════════════
+//  SIDEBAR PANEL
+// ═══════════════════════════════════════════════════════════
+
+chrome.action.onClicked.addListener((tab) => {
+    chrome.sidePanel.open({ windowId: tab.windowId });
+});
+
+
+// ═══════════════════════════════════════════════════════════
 //  STATE
 // ═══════════════════════════════════════════════════════════
 

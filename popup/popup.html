@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LifeOS</title>
+  <title>LifeOS Sidebar</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 
@@ -13,21 +13,24 @@
     <!-- Header -->
     <header class="popup-header">
       <div class="logo">
-        <span class="logo-icon">🧠</span>
+        <span class="logo-icon">●</span>
         <span class="logo-text">LifeOS</span>
       </div>
-      <div class="status-indicator" id="statusDot"></div>
+      <div class="header-right">
+        <button class="refresh-btn" id="refreshBtn">↻</button>
+        <div class="status-indicator" id="statusDot"></div>
+      </div>
     </header>
 
     <!-- Auth Section (shown when not logged in) -->
     <div id="authSection" class="section auth-section">
+      <div class="auth-icon">●</div>
       <h3>Sign In</h3>
+      <p class="auth-description">Access your learning dashboard</p>
+      
       <input type="email" id="loginEmail" placeholder="Email" class="input">
       <input type="password" id="loginPassword" placeholder="Password" class="input">
       <button id="loginBtn" class="btn btn-primary">Sign In</button>
-      <p class="auth-link">
-        <a href="http://127.0.0.1:5173/register" target="_blank">Create Account →</a>
-      </p>
       <p id="authError" class="error-text"></p>
     </div>
 
@@ -35,42 +38,94 @@
     <div id="dashboardSection" class="section" style="display: none;">
       <!-- User Info -->
       <div class="user-bar">
-        <span id="userName" class="user-name"></span>
+        <div class="user-avatar">●</div>
+        <div class="user-info">
+          <div id="userName" class="user-name"></div>
+          <div class="user-status">Online</div>
+        </div>
         <button id="logoutBtn" class="btn btn-sm">Logout</button>
       </div>
 
-      <!-- Current Status -->
-      <div class="status-card">
-        <div class="status-row">
-          <span class="label">Tracking</span>
-          <span id="trackingStatus" class="value">—</span>
+      <!-- Tab Navigation -->
+      <div class="tab-nav">
+        <button class="tab-btn active" data-tab="learning">Learning</button>
+        <button class="tab-btn" data-tab="tracking">Tracking</button>
+      </div>
+
+      <!-- Learning Tab -->
+      <div id="learningTab" class="tab-content active">
+        <!-- Overall Progress -->
+        <div class="progress-overview" id="progressOverview">
+          <div class="progress-header">
+            <span class="progress-title">Today's Progress</span>
+            <span class="progress-percentage" id="todayPercentage">0%</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" id="todayProgress" style="width: 0%"></div>
+          </div>
+          <div class="stats-grid">
+            <div class="stat-item">
+              <span class="stat-value" id="completedChapters">0</span>
+              <span class="stat-label">Done</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-value" id="totalChapters">0</span>
+              <span class="stat-label">Total</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-value" id="studyPlansCount">0</span>
+              <span class="stat-label">Plans</span>
+            </div>
+          </div>
         </div>
-        <div class="status-row">
-          <span class="label">Current Site</span>
-          <span id="currentDomain" class="value domain">—</span>
+            </div>
+          </div>
         </div>
-        <div class="status-row">
-          <span class="label">Active</span>
-          <span id="activeStatus" class="value">—</span>
+
+        <!-- Study Plans List -->
+        <div id="studyPlansList" class="study-plans-list">
+          <div class="loading-state">
+            <div class="spinner"></div>
+            <p>Loading...</p>
+          </div>
         </div>
-        <div class="status-row">
-          <span class="label">Queued Logs</span>
-          <span id="queueSize" class="value">0</span>
-        </div>
-        <div class="status-row">
-          <span class="label">WebSocket</span>
-          <span id="wsStatus" class="value">—</span>
+
+        <div id="emptyState" class="empty-state" style="display: none;">
+          <p>No study plans yet</p>
+          <a href="http://127.0.0.1:5173/learning" target="_blank">Create Study Plan</a>
         </div>
       </div>
 
-      <!-- Quick Actions -->
-      <div class="actions">
-        <a href="http://127.0.0.1:5173/dashboard" target="_blank" class="btn btn-primary" style="margin-bottom: 8px;">
-          Open Dashboard
-        </a>
-        <button id="blockBtn" class="btn btn-secondary">
-          Block This Site
-        </button>
+      <!-- Tracking Tab -->
+      <div id="trackingTab" class="tab-content">
+        <div class="tracking-status-card">
+          <div class="status-row">
+            <span class="label">Status</span>
+            <span id="trackingStatus" class="status-badge">—</span>
+          </div>
+          <div class="status-row">
+            <span class="label">Domain</span>
+            <span id="currentDomain" class="value domain">—</span>
+          </div>
+          <div class="status-row">
+            <span class="label">Active</span>
+            <span id="activeStatus" class="value">—</span>
+          </div>
+          <div class="status-row">
+            <span class="label">Queue</span>
+            <span id="queueSize" class="value">0</span>
+          </div>
+          <div class="status-row">
+            <span class="label">WebSocket</span>
+            <span id="wsStatus" class="value">—</span>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="blockBtn" class="btn btn-primary" style="display: none;">
+            Block This Site
+          </button>
+        </div>
       </div>
     </div>
   </div>
