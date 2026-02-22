@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LifeOS</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="popup-header">
+      <div class="logo">
+        <span class="logo-icon">🧠</span>
+        <span class="logo-text">LifeOS</span>
+      </div>
+      <div class="status-indicator" id="statusDot"></div>
+    </header>
+
+    <!-- Auth Section (shown when not logged in) -->
+    <div id="authSection" class="section auth-section">
+      <h3>Sign In</h3>
+      <input type="email" id="loginEmail" placeholder="Email" class="input">
+      <input type="password" id="loginPassword" placeholder="Password" class="input">
+      <button id="loginBtn" class="btn btn-primary">Sign In</button>
+      <p class="auth-link">
+        <a href="http://127.0.0.1:5173/register" target="_blank">Create Account →</a>
+      </p>
+      <p id="authError" class="error-text"></p>
+    </div>
+
+    <!-- Dashboard Section (shown when logged in) -->
+    <div id="dashboardSection" class="section" style="display: none;">
+      <!-- User Info -->
+      <div class="user-bar">
+        <span id="userName" class="user-name"></span>
+        <button id="logoutBtn" class="btn btn-sm">Logout</button>
+      </div>
+
+      <!-- Current Status -->
+      <div class="status-card">
+        <div class="status-row">
+          <span class="label">Tracking</span>
+          <span id="trackingStatus" class="value">—</span>
+        </div>
+        <div class="status-row">
+          <span class="label">Current Site</span>
+          <span id="currentDomain" class="value domain">—</span>
+        </div>
+        <div class="status-row">
+          <span class="label">Active</span>
+          <span id="activeStatus" class="value">—</span>
+        </div>
+        <div class="status-row">
+          <span class="label">Queued Logs</span>
+          <span id="queueSize" class="value">0</span>
+        </div>
+        <div class="status-row">
+          <span class="label">WebSocket</span>
+          <span id="wsStatus" class="value">—</span>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="actions">
+        <a href="http://127.0.0.1:5173/dashboard" target="_blank" class="btn btn-primary" style="margin-bottom: 8px;">
+          Open Dashboard
+        </a>
+        <button id="blockBtn" class="btn btn-secondary">
+          Block This Site
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>

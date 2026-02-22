@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "LifeOS",
+  "version": "1.0.0",
+  "description": "AI-Powered Digital Well-Being & Adaptive Learning Platform",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "alarms",
+    "idle",
+    "storage",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "ws://127.0.0.1:8000/*",
+    "http://localhost:8000/*",
+    "ws://localhost:8000/*"
+  ],
+  "background": {
+    "service_worker": "background/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/blockOverlay.js",
+        "content/contentScript.js",
+        "content/scrollTracker.js",
+        "content/focusTracker.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*.youtube.com/*"
+      ],
+      "js": [
+        "content/youtubeTracker.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "declarative_net_request": {
+    "rule_resources": []
+  }
+}

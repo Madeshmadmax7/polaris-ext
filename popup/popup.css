@@ -1,0 +1,210 @@
+/* LifeOS Extension Popup Styles */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  width: 320px;
+  min-height: 200px;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #0f0f23;
+  color: #e0e0ff;
+}
+
+.popup-container {
+  padding: 16px;
+}
+
+/* Header */
+.popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logo-icon {
+  font-size: 20px;
+}
+
+.logo-text {
+  font-size: 18px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #7c5cff, #00d4ff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.status-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #444;
+  transition: background 0.3s;
+}
+
+.status-indicator.connected {
+  background: #00ff88;
+  box-shadow: 0 0 8px rgba(0, 255, 136, 0.5);
+}
+
+.status-indicator.disconnected {
+  background: #ff4444;
+}
+
+/* Auth Section */
+.auth-section h3 {
+  font-size: 14px;
+  margin-bottom: 12px;
+  color: #b0b0e0;
+}
+
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #e0e0ff;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.input:focus {
+  border-color: #7c5cff;
+}
+
+.input::placeholder {
+  color: #666;
+}
+
+/* Buttons */
+.btn {
+  display: inline-block;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  text-align: center;
+  transition: all 0.2s;
+  width: 100%;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #7c5cff, #5c3cdf);
+  color: white;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(124, 92, 255, 0.3);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 11px;
+  width: auto;
+  background: rgba(255, 255, 255, 0.08);
+  color: #aaa;
+  border-radius: 6px;
+}
+
+.btn-sm:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* User Bar */
+.user-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.user-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #c0c0ff;
+}
+
+/* Status Card */
+.status-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 12px;
+}
+
+.status-row:not(:last-child) {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.label {
+  color: #888;
+}
+
+.value {
+  font-weight: 500;
+  color: #c0c0ff;
+}
+
+.value.domain {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Actions */
+.actions {
+  margin-top: 8px;
+}
+
+/* Auth Link */
+.auth-link {
+  text-align: center;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.auth-link a {
+  color: #7c5cff;
+  text-decoration: none;
+}
+
+.auth-link a:hover {
+  text-decoration: underline;
+}
+
+/* Error */
+.error-text {
+  color: #ff6b6b;
+  font-size: 12px;
+  margin-top: 8px;
+  text-align: center;
+}
