@@ -86,19 +86,16 @@ console.log('[LifeOS] blockOverlay.js ENTRY');
                 const isSearchPage = currentPath.startsWith('/results') || currentPath.startsWith('/search');
 
                 if (isWatchPage && !isSearchPage) {
-                    // STRICT: Only block if definitively classified as 'distracting'
+                    // Block if classified as 'distracting'
                     if (ytClass === 'distracting') {
                         console.log('[LifeOS] Blocking distracting YouTube video');
                         finalBlocked = true;
                     } else if (ytClass === 'productive') {
                         console.log('[LifeOS] Allowing productive YouTube video');
                         finalBlocked = false; // Override even manual blocks for productive videos
-                    } else {
-                        // Classification is 'pending' or 'none' — DO NOT BLOCK
-                        // Wait for youtubeTracker to classify
-                        console.log(`[LifeOS] YouTube classification pending (${ytClass}), allowing playback`);
-                        finalBlocked = false;
                     }
+                    // If 'pending' or 'none', don't change finalBlocked (keep manual block status)
+                    // The periodic check will pick it up once classified
                 } else if (isSearchPage || currentPath === '/') {
                     // YouTube home/search — don't auto-block unless manually blocked
                     // Keep finalBlocked as isBlockedManually
@@ -279,17 +276,18 @@ console.log('[LifeOS] blockOverlay.js ENTRY');
     if (window.location.hostname.includes('youtube.com')) {
         window.addEventListener('yt-navigate-finish', () => {
             console.log('[LifeOS] YT Navigate - checking block');
-            checkBlock();
+            // Small delay to let youtubeTracker classify first
+            setTimeout(checkBlock, 100);
         });
     }
 
-    // Initial check
+    // Initial check - immediate for all sites
     checkBlock();
 
-    // Periodic fallback check every 2 seconds (for edge cases only)
+    // Periodic fallback check every 1 second for fast blocking response
     checkInterval = setInterval(() => {
         checkBlock();
-    }, 2000);
+    }, 1000); // 1 second for faster blocking detection
 
     console.log('[LifeOS] Overlay Running (strict distraction-only mode)');
 })();

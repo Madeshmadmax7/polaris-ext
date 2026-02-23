@@ -48,6 +48,7 @@ let focusLossTimeout = null;
 let isFinalizing = false;
 let currentPageTitle = null;
 let ytTabClassifications = {};
+let tabPageTitles = {}; // Store page titles per tab to preserve across sessions
 
 // ── Session State Persistence (survives service worker sleep) ──
 async function saveSessionState() {
@@ -58,6 +59,8 @@ async function saveSessionState() {
             start: sessionStart,
             title: currentPageTitle,
             tabSwitches: tabSwitchCount,
+            tabPageTitles: tabPageTitles,  // Persist per-tab titles
+            ytTabClassifications: ytTabClassifications,  // Persist YT classifications
         }
     });
 }
@@ -70,6 +73,8 @@ async function restoreSessionState() {
         sessionStart = _session.start;
         currentPageTitle = _session.title || null;
         tabSwitchCount = _session.tabSwitches || 0;
+        tabPageTitles = _session.tabPageTitles || {};  // Restore per-tab titles
+        ytTabClassifications = _session.ytTabClassifications || {};  // Restore YT classifications
         console.log(`[LifeOS] Restored session: ${activeTabDomain}, started ${sessionStart ? new Date(sessionStart).toISOString() : 'null'}`);
     }
 }
@@ -80,38 +85,51 @@ async function restoreSessionState() {
 // ═══════════════════════════════════════════════════════════
 
 function sendLiveActivity(data) {
+    const activityData = {
+        domain: data.domain || activeTabDomain || '',
+        page_title: data.page_title || currentPageTitle || null,
+        category: data.category || 'neutral',
+        duration_seconds: data.duration_seconds || 0,
+        status: data.status || 'active',
+        timestamp: new Date().toISOString(),
+    };
+    
     if (isConnected()) {
+        console.log(`[Live] Sending: ${activityData.domain} - "${activityData.page_title}" (${activityData.category})`);
         sendMessage({
             type: 'live_activity',
-            data: {
-                domain: data.domain || activeTabDomain || '',
-                page_title: data.page_title || currentPageTitle || null,
-                category: data.category || 'neutral',
-                duration_seconds: data.duration_seconds || 0,
-                status: data.status || 'active',
-                timestamp: new Date().toISOString(),
-            },
+            data: activityData,
         });
+    } else {
+        console.log(`[Live] WS not connected, cannot send: ${activityData.domain}`);
     }
 }
 
 
 // ═══════════════════════════════════════════════════════════
-//  1. HEARTBEAT ALARM (Worker Sleep Recovery)
+//  1. ALARMS (Worker Sleep Recovery)
 // ═══════════════════════════════════════════════════════════
 
-chrome.alarms.create('heartbeat', { periodInMinutes: 0.5 }); // 30 seconds
+// Tracking flush: Every 30 seconds for active sessions
+chrome.alarms.create('tracking_flush', { periodInMinutes: 0.5 }); // 30 seconds (Chrome minimum)
+
+// WebSocket heartbeat: Every 30 seconds to keep connection alive
+chrome.alarms.create('ws_heartbeat', { periodInMinutes: 0.5 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
     await initPromise;
-    if (alarm.name === 'heartbeat') {
-        // Periodic session flush
+    
+    if (alarm.name === 'tracking_flush') {
+        console.log(`[Alarm] tracking_flush fired - activeTabDomain=${activeTabDomain}, session=${sessionStart ? 'active' : 'null'}`);
+        // Flush active tracking session
         await finalizeCurrentSession();
-
+        
         // Retry offline queue
         await flushOfflineQueue();
-
-        // WS heartbeat or reconnect
+    }
+    
+    if (alarm.name === 'ws_heartbeat') {
+        // WebSocket heartbeat or reconnect
         if (isConnected()) {
             sendHeartbeat();
         } else {
@@ -145,6 +163,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
     await initPromise;
     delete ytTabClassifications[tabId];
+    delete tabPageTitles[tabId]; // Clean up stored title
 
     if (tabId === activeTabId) {
         console.log(`[LifeOS] Active tab ${tabId} closed, finalizing session for ${activeTabDomain}`);
@@ -170,10 +189,12 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
     await initPromise;
     if (windowId === chrome.windows.WINDOW_ID_NONE) {
+        // User switched away from browser - wait 5 seconds before pausing
+        // (allows checking notifications, quick alt-tabs, etc.)
         focusLossTimeout = setTimeout(() => {
             isWindowFocused = false;
             pauseTracking();
-        }, 300);
+        }, 5000); // 5 seconds tolerance
     } else {
         if (focusLossTimeout) {
             clearTimeout(focusLossTimeout);
@@ -217,13 +238,18 @@ chrome.idle.onStateChanged.addListener(async (state) => {
 // ═══════════════════════════════════════════════════════════
 
 async function handleTabChange(tabId) {
+    console.log(`[Track] handleTabChange called for tab ${tabId}`);
+    
     // Finalize previous tracking period
     await finalizeCurrentSession();
 
     // Start new session
     try {
         const tab = await chrome.tabs.get(tabId);
+        console.log(`[Track] Tab URL: ${tab?.url?.substring(0, 50)}...`);
+        
         if (!tab.url || tab.url.startsWith('chrome://')) {
+            console.log(`[Track] Skipping non-trackable URL`);
             activeTabId = null;
             activeTabDomain = '';
             currentPageTitle = null;
@@ -239,7 +265,9 @@ async function handleTabChange(tabId) {
         activeTabId = tabId;
         activeTabDomain = sanitizeUrl(tab.url);
         sessionStart = Date.now();
-        currentPageTitle = null;
+        
+        // Use stored title if available (for YouTube), otherwise use tab.title for other sites
+        currentPageTitle = tabPageTitles[tabId] || tab.title || null;
 
         // Reset classification for new domain
         await chrome.storage.local.set({ 'yt_current_classification': 'none' });
@@ -256,18 +284,26 @@ async function handleTabChange(tabId) {
 
         await saveSessionState();
 
+        // TRIGGER BLOCK CHECK for content script
+        try {
+            chrome.tabs.sendMessage(tabId, { type: 'CHECK_BLOCK' });
+        } catch (e) {
+            // Content script might not be loaded yet - that's OK, it will check on load
+        }
+
         // IMMEDIATELY send live activity for new tab
         const category = isDistracting ? 'distracting' : 'neutral';
         sendLiveActivity({
             domain: activeTabDomain,
-            page_title: tab.title || null,
+            page_title: currentPageTitle || tab.title || null,
             category: category,
             status: 'active',
             duration_seconds: 0,
         });
 
-        console.log(`[Track] New session: ${activeTabDomain}`);
+        console.log(`[Track] New session: ${activeTabDomain}${currentPageTitle ? ' - "' + currentPageTitle + '"' : ''}`);
     } catch (e) {
+        console.error(`[Track] handleTabChange error:`, e);
         activeTabId = null;
         activeTabDomain = '';
         currentPageTitle = null;
@@ -276,12 +312,16 @@ async function handleTabChange(tabId) {
 }
 
 async function finalizeCurrentSession() {
-    if (!activeTabDomain || !sessionStart || isFinalizing) return;
+    if (!activeTabDomain || !sessionStart || isFinalizing) {
+        console.log(`[Track] Skip finalize: domain=${activeTabDomain}, session=${sessionStart}, finalizing=${isFinalizing}`);
+        return;
+    }
     isFinalizing = true;
 
     try {
         const now = Date.now();
         const duration = Math.floor((now - sessionStart) / 1000);
+        console.log(`[Track] Finalizing: ${activeTabDomain}, duration=${duration}s`);
 
         if (duration < 1) {
             isFinalizing = false;
@@ -290,9 +330,15 @@ async function finalizeCurrentSession() {
 
         // Capture data BEFORE reset
         const logDomain = activeTabDomain;
-        const logTitle = currentPageTitle;
+        let logTitle = currentPageTitle;
         const logSwitches = tabSwitchCount;
         const wasActive = isWindowFocused;
+        
+        // FIX: If currentPageTitle is null but we have a stored title for this tab, use it
+        if (!logTitle && activeTabId && tabPageTitles[activeTabId]) {
+            logTitle = tabPageTitles[activeTabId];
+            console.log(`[Track] Using stored title: "${logTitle}"`);
+        }
 
         // Reset state synchronously BEFORE await
         sessionStart = now;
@@ -310,10 +356,12 @@ async function finalizeCurrentSession() {
         };
 
         const sanitized = sanitizeTrackingData(logEntry);
+        console.log(`[Track] Log entry:`, JSON.stringify(sanitized));
 
         try {
             const authed = await isAuthenticated();
             if (!authed) {
+                console.log(`[Track] Not authenticated, queuing`);
                 await enqueue(sanitized);
             } else {
                 await sendTrackingLog(sanitized);
@@ -431,12 +479,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     return { ack: true };
 
                 case 'YOUTUBE_VIDEO_INFO':
+                    console.log(`[YT] Received YOUTUBE_VIDEO_INFO from tab ${sender?.tab?.id}`);
                     if (sender.tab && message.data) {
                         const tabId = sender.tab.id;
                         const classification = message.data.classification;
 
                         ytTabClassifications[tabId] = classification;
+                        
+                        // Store page title per tab (not just for active tab)
+                        if (message.data.title) {
+                            tabPageTitles[tabId] = message.data.title;
+                            // IMPORTANT: Always save session state to persist title across service worker restarts
+                            await saveSessionState();
+                        }
 
+                        console.log(`[YT] Tab ${tabId} video: "${message.data.title}" → ${classification}, activeTabId=${activeTabId}`);
                         if (tabId === activeTabId) {
                             currentPageTitle = message.data.title || null;
                             console.log(`[YT] Active Video: "${currentPageTitle}" → ${classification}`);
@@ -451,6 +508,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                                 category: classification,
                                 status: 'active',
                             });
+                            
+                            // TRIGGER IMMEDIATE BLOCK CHECK (for immediate blocking/unblocking)
+                            try {
+                                chrome.tabs.sendMessage(tabId, { type: 'CHECK_BLOCK' });
+                            } catch (e) {
+                                console.debug('[YT] Failed to send CHECK_BLOCK:', e.message);
+                            }
+                            
+                            // TRY TO MATCH TO ACTIVE CHAPTER AND UPDATE BACKEND (only if duration available)
+                            if (message.data.duration_seconds > 0) {
+                                const chapterMatch = await matchVideoToChapter(message.data);
+                                if (chapterMatch) {
+                                    console.log(`[YT] Matched to chapter: ${chapterMatch.chapter_title}`);
+                                    return { ack: true, chapter_match: chapterMatch };
+                                }
+                            }
                         }
                     }
                     return { ack: true };
@@ -514,6 +587,159 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 
 // ═══════════════════════════════════════════════════════════
+//  CHAPTER VIDEO MATCHING (Auto-detect videos for courses)
+// ═══════════════════════════════════════════════════════════
+
+async function matchVideoToChapter(videoData) {
+    try {
+        // PRECAUTION: Never match distraction videos (Issue #1)
+        if (videoData.classification === 'distracting') {
+            console.log('[Match] Skipping distraction video - no chapter match');
+            return null;
+        }
+
+        const { auth_token } = await chrome.storage.local.get('auth_token');
+        if (!auth_token) return null;
+
+        // Fetch active study plans
+        const response = await fetch('http://127.0.0.1:8000/api/ai/study-plans', {
+            headers: {
+                'Authorization': `Bearer ${auth_token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!response.ok) return null;
+
+        const plans = await response.json();
+        if (!plans || plans.length === 0) return null;
+
+        const videoTitle = (videoData.title || '').toLowerCase();
+        const videoTitleWords = videoTitle.split(/\s+/).filter(w => w.length > 2);
+
+        // Check each plan's chapters
+        for (const plan of plans) {
+            // Fetch progress for this plan
+            const progressResponse = await fetch(`http://127.0.0.1:8000/api/ai/study-plan/${plan.id}/progress`, {
+                headers: {
+                    'Authorization': `Bearer ${auth_token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (!progressResponse.ok) continue;
+
+            const progress = await progressResponse.json();
+            const chapters = progress.chapters || [];
+
+            // Find BEST matching chapter using AI-generated importance scores
+            let bestMatch = null;
+            let bestScore = 0;
+
+            for (const chapter of chapters) {
+                if (chapter.is_completed) continue; // Skip completed chapters
+
+                const chapterTitle = (chapter.chapter_title || '').toLowerCase();
+                const keywordImportance = chapter.keyword_importance || {};
+                
+                // Calculate weighted match score using AI importance
+                let totalImportance = 0;
+                let matchedImportance = 0;
+                let matchedKeywords = [];
+
+                // If AI provided importance scores, use them
+                if (Object.keys(keywordImportance).length > 0) {
+                    for (const [keyword, importance] of Object.entries(keywordImportance)) {
+                        const keywordLower = keyword.toLowerCase();
+                        totalImportance += importance;
+                        
+                        // Check if video title contains this keyword
+                        if (videoTitleWords.some(w => w.includes(keywordLower) || keywordLower.includes(w))) {
+                            matchedImportance += importance;
+                            matchedKeywords.push(`${keyword}(${importance})`);
+                        }
+                    }
+                    
+                    // Calculate importance-weighted percentage
+                    const matchPercentage = totalImportance > 0 ? (matchedImportance / totalImportance) * 100 : 0;
+                    
+                    // STRICT: Require 60%+ weighted match
+                    if (matchPercentage >= 60) {
+                        const score = matchedImportance; // Use weighted score
+                        
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestMatch = {
+                                chapter: chapter,
+                                percentage: matchPercentage,
+                                keywords: matchedKeywords
+                            };
+                        }
+                    }
+                } else {
+                    // Fallback: Basic word matching if no AI importance scores
+                    const chapterWords = chapterTitle.split(/\s+/).filter(w => w.length > 2);
+                    const commonWords = videoTitleWords.filter(w => chapterWords.some(cw => cw.includes(w) || w.includes(cw)));
+                    
+                    if (commonWords.length >= 2) {
+                        const matchPercentage = (commonWords.length / chapterWords.length) * 100;
+                        if (matchPercentage >= 60) {
+                            const score = commonWords.length * matchPercentage;
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestMatch = {
+                                    chapter: chapter,
+                                    percentage: matchPercentage,
+                                    keywords: commonWords
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If found a good match, update it
+            if (bestMatch) {
+                console.log(`[Match] Video "${videoData.title}" → Chapter "${bestMatch.chapter.chapter_title}" (${bestMatch.percentage.toFixed(0)}% weighted match: ${bestMatch.keywords.join(', ')})`);
+
+                // Send video details to backend
+                const setVideoResponse = await fetch(`http://127.0.0.1:8000/api/ai/study-plan/${plan.id}/chapter/${bestMatch.chapter.chapter_index}/set-video`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${auth_token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        video_url: videoData.video_url,
+                        video_duration_seconds: videoData.duration_seconds || 0,
+                        video_id: videoData.videoId,
+                        video_title: videoData.title,
+                        creator_name: videoData.channel_name
+                    })
+                });
+
+                if (setVideoResponse.ok) {
+                    return {
+                        plan_id: plan.id,
+                        chapter_index: bestMatch.chapter.chapter_index,
+                        chapter_title: bestMatch.chapter.chapter_title,
+                        matched: true
+                    };
+                }
+            } else {
+                console.log(`[Match] No strict match found for "${videoData.title}" (need 60%+ match with 2+ unique keywords)`);
+            }
+        }
+
+        return null;
+    } catch (error) {
+        console.error('[Match] Error matching video to chapter:', error);
+        return null;
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════
 //  8. INITIALIZATION
 // ═══════════════════════════════════════════════════════════
 
@@ -561,16 +787,7 @@ async function init() {
     }
 
     console.log(`[LifeOS] Ready. Tracking: ${activeTabDomain || 'none'}, session age: ${sessionStart ? Math.round((Date.now() - sessionStart) / 1000) + 's' : 'none'}`);
-
-    // Fast tracking cycle: flush every 3 seconds for real-time updates
-    setInterval(async () => {
-        if (sessionStart && isWindowFocused) {
-            await finalizeCurrentSession();
-        }
-        if (isConnected()) {
-            sendHeartbeat();
-        }
-    }, 3000);
+    console.log(`[LifeOS] Basic tracking: 30s intervals | Progress tracking: 10s (when matched to chapter)`);
 }
 
 const initPromise = init();

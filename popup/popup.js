@@ -252,11 +252,25 @@ function renderStudyPlans(plans) {
                         ${chapters.slice(0, 3).map((chapter, idx) => {
                             const chapterProgress = progress?.chapters?.find(c => c.chapter_index === chapter.chapter_number);
                             const isCompleted = chapterProgress?.is_completed || false;
+                            const watchProgress = chapterProgress?.progress_percentage || 0;
+                            const watchedSeconds = chapterProgress?.watched_seconds || 0;
+                            const videoDuration = chapterProgress?.video_duration_seconds || 0;
+                            const hasVideo = videoDuration > 0;
                             
                             return `
                                 <div class="chapter-item ${isCompleted ? 'completed' : ''}">
-                                    <span class="chapter-check">${isCompleted ? '✓' : '○'}</span>
-                                    <span class="chapter-name">${chapter.title}</span>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                                        <div style="display: flex; align-items: center; gap: 6px;">
+                                            <span class="chapter-check">${isCompleted ? '✓' : '○'}</span>
+                                            <span class="chapter-name">${chapter.title}</span>
+                                        </div>
+                                        ${hasVideo ? `<span style="font-size: 10px; color: var(--text-muted);">${Math.round(watchProgress)}%</span>` : ''}
+                                    </div>
+                                    ${hasVideo ? `
+                                        <div style="width: 100%; height: 3px; background: var(--bg-elevated); border-radius: 2px; margin-top: 4px; overflow: hidden;">
+                                            <div style="width: ${watchProgress}%; height: 100%; background: linear-gradient(90deg, var(--color-primary), var(--color-secondary)); transition: width 0.3s ease;"></div>
+                                        </div>
+                                    ` : ''}
                                 </div>
                             `;
                         }).join('')}
@@ -271,7 +285,7 @@ function renderStudyPlans(plans) {
                     </div>
                 ` : ''}
 
-                <a href="http://127.0.0.1:5174/learning" target="_blank" class="plan-link">
+                <a href="http://127.0.0.1:5173/learning" target="_blank" class="plan-link">
                     View Full Plan →
                 </a>
             </div>

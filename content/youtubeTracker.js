@@ -42,6 +42,9 @@
     let lastTitle = null;
     let trackingInterval = null;
     let titleObserver = null;
+    let videoDuration = 0;
+    let currentChapterMatch = null;
+    let progressTrackingInterval = null;
 
     /**
      * Safety check for extension context.
@@ -60,6 +63,7 @@
     function stopAll() {
         if (trackingInterval) clearInterval(trackingInterval);
         if (titleObserver) titleObserver.disconnect();
+        stopProgressTracking();
         console.log('[LifeOS] YouTube tracker disabled - context invalidated. PLEASE REFRESH PAGE.');
     }
 
@@ -99,6 +103,67 @@
     }
 
     /**
+     * Get video duration in seconds from YouTube player.
+     */
+    function getVideoDuration() {
+        try {
+            // Method 1: Try to get from video element
+            const videoElement = document.querySelector('video');
+            if (videoElement && videoElement.duration && !isNaN(videoElement.duration)) {
+                return Math.floor(videoElement.duration);
+            }
+
+            // Method 2: Try to parse from duration text
+            const durationElement = document.querySelector('.ytp-time-duration');
+            if (durationElement && durationElement.textContent) {
+                return parseDurationText(durationElement.textContent);
+            }
+
+            return 0;
+        } catch (e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Parse duration text like "13:45" or "1:23:45" to seconds.
+     */
+    function parseDurationText(text) {
+        try {
+            const parts = text.trim().split(':').map(p => parseInt(p) || 0);
+            if (parts.length === 2) {
+                // MM:SS
+                return parts[0] * 60 + parts[1];
+            } else if (parts.length === 3) {
+                // HH:MM:SS
+                return parts[0] * 3600 + parts[1] * 60 + parts[2];
+            }
+            return 0;
+        } catch (e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Get channel/creator name from YouTube page.
+     */
+    function getChannelName() {
+        try {
+            // Method 1: New UI
+            const channelLink = document.querySelector('ytd-channel-name a');
+            if (channelLink) return channelLink.textContent.trim();
+
+            // Method 2: Old UI
+            const ownerName = document.querySelector('#owner-name a');
+            if (ownerName) return ownerName.textContent.trim();
+
+            return null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
      * Classify video title as 'productive' or 'distracting'.
      */
     function classifyVideo(title) {
@@ -113,6 +178,110 @@
         }
 
         return 'distracting';
+    }
+
+    /**
+     * Start real-time progress tracking for matched chapter.
+     * Sends video.currentTime to backend every 10 seconds.
+     */
+    function startProgressTracking(chapterMatch) {
+        // Stop any existing tracking
+        stopProgressTracking();
+
+        if (!chapterMatch) return;
+
+        console.log(`[LifeOS YT] Starting real-time progress tracking for: ${chapterMatch.chapter_title}`);
+
+        // Initial progress update
+        sendProgressUpdate(chapterMatch, false);
+
+        // Update every 10 seconds (user requirement: minimum time to send details)
+        progressTrackingInterval = setInterval(() => {
+            if (!isContextValid()) {
+                stopProgressTracking();
+                return;
+            }
+            sendProgressUpdate(chapterMatch, false);
+        }, 10000); // 10 seconds
+
+        // Listen for video ended event
+        const videoElement = document.querySelector('video');
+        if (videoElement) {
+            videoElement.addEventListener('ended', () => {
+                console.log('[LifeOS YT] Video ended - marking chapter complete');
+                sendProgressUpdate(chapterMatch, true);
+                stopProgressTracking();
+            }, { once: true });
+        }
+    }
+
+    /**
+     * Stop progress tracking.
+     */
+    function stopProgressTracking() {
+        if (progressTrackingInterval) {
+            clearInterval(progressTrackingInterval);
+            progressTrackingInterval = null;
+            console.log('[LifeOS YT] Stopped progress tracking');
+        }
+    }
+
+    /**
+     * Send current video progress to backend.
+     * Uses exact video.currentTime (no logic, strictly time).
+     */
+    async function sendProgressUpdate(chapterMatch, videoEnded) {
+        try {
+            // PRECAUTION: Verify video is still productive before updating (Issue #1)
+            const videoTitle = getVideoTitle();
+            const currentClassification = classifyVideo(videoTitle);
+            
+            if (currentClassification === 'distracting') {
+                console.log('[LifeOS YT] Distraction video detected - stopping progress tracking');
+                stopProgressTracking();
+                return;
+            }
+
+            const videoElement = document.querySelector('video');
+            if (!videoElement) return;
+
+            // Get EXACT current time from video player (strictly only time, no logic)
+            const currentTime = Math.floor(videoElement.currentTime);
+            
+            // Skip if no meaningful progress
+            if (currentTime < 1 && !videoEnded) return;
+
+            console.log(`[LifeOS YT] Progress: ${currentTime}s / ${videoDuration}s (${((currentTime / videoDuration) * 100).toFixed(1)}%)${videoEnded ? ' - VIDEO ENDED' : ''}`);
+
+            // Get auth token
+            const { auth_token } = await chrome.storage.local.get('auth_token');
+            if (!auth_token) return;
+
+            // Send to backend API
+            const response = await fetch(`http://127.0.0.1:8000/api/ai/study-plan/${chapterMatch.plan_id}/chapter/${chapterMatch.chapter_index}/update-progress`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${auth_token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    watched_seconds: currentTime,
+                    video_ended: videoEnded
+                })
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                console.log(`[LifeOS YT] Progress updated: ${result.progress_percentage?.toFixed(1)}%${result.is_completed ? ' - COMPLETED ✓' : ''}`);
+                
+                // If completed, stop tracking
+                if (result.is_completed) {
+                    stopProgressTracking();
+                }
+            }
+        } catch (error) {
+            console.debug('[LifeOS YT] Progress update failed:', error.message);
+        }
     }
 
     /**
@@ -138,9 +307,10 @@
         lastTitle = title;
 
         const classification = classifyVideo(title);
-
-        console.log(`[LifeOS YT] "${title}" → ${classification}`);
-
+        
+        console.log(`[LifeOS YT] "${title}" → ${classification} (immediate classification)`);
+        
+        // IMMEDIATE: Send classification right away for blocking overlay
         try {
             chrome.runtime.sendMessage({
                 type: 'YOUTUBE_VIDEO_INFO',
@@ -148,16 +318,55 @@
                     title: title,
                     videoId: videoId,
                     classification: classification,
+                    duration_seconds: 0, // Will be updated later
+                    video_url: window.location.href,
+                    channel_name: null // Will be updated later
                 },
             }, (response) => {
                 if (chrome.runtime.lastError) {
-                    console.debug('[LifeOS YT] Message failed:', chrome.runtime.lastError.message);
+                    console.debug('[LifeOS YT] Immediate message failed:', chrome.runtime.lastError.message);
                 }
             });
         } catch (e) {
-            // Extension context invalidated
-            console.debug('[LifeOS YT] Send failed:', e.message);
+            console.debug('[LifeOS YT] Immediate send failed:', e.message);
         }
+        
+        // DELAYED: Get video duration and channel name (wait for page to load)
+        setTimeout(() => {
+            const duration = getVideoDuration();
+            const channelName = getChannelName();
+            
+            videoDuration = duration;
+
+            console.log(`[LifeOS YT] Duration updated: ${duration}s | Channel: ${channelName}`);
+
+            try {
+                chrome.runtime.sendMessage({
+                    type: 'YOUTUBE_VIDEO_INFO',
+                    data: {
+                        title: title,
+                        videoId: videoId,
+                        classification: classification,
+                        duration_seconds: duration,
+                        video_url: window.location.href,
+                        channel_name: channelName
+                    },
+                }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        console.debug('[LifeOS YT] Delayed message failed:', chrome.runtime.lastError.message);
+                    } else if (response && response.chapter_match) {
+                        currentChapterMatch = response.chapter_match;
+                        console.log(`[LifeOS YT] Matched to chapter: ${currentChapterMatch.chapter_title}`);
+                        
+                        // START REAL-TIME PROGRESS TRACKING
+                        startProgressTracking(currentChapterMatch);
+                    }
+                });
+            } catch (e) {
+                // Extension context invalidated
+                console.debug('[LifeOS YT] Delayed send failed:', e.message);
+            }
+        }, 2000); // Wait 2 seconds for video player to load
     }
 
     /**
@@ -173,38 +382,50 @@
     // ── Initial check ────────────────────────────────────────
     checkShortsRedirect();
     // Wait a moment for the page to fully render
-    setTimeout(reportVideoInfo, 200);
+    setTimeout(reportVideoInfo, 500);
 
-    // ── Periodic re-report ──
+    // ── Periodic check for video changes ──
     trackingInterval = setInterval(() => {
         if (!isContextValid()) return;
         if (window.location.pathname.startsWith('/watch')) {
-            const title = getVideoTitle();
             const videoId = getVideoId();
-            if (title && videoId) {
-                try {
-                    chrome.runtime.sendMessage({
-                        type: 'YOUTUBE_VIDEO_INFO',
-                        data: { title, videoId, classification: classifyVideo(title) },
-                    }, () => { if (chrome.runtime.lastError) { } });
-                } catch (e) { }
+            const title = getVideoTitle();
+            
+            // Only report if video changed
+            if ((videoId && videoId !== lastVideoId) || (title && title !== lastTitle)) {
+                reportVideoInfo();
+            }
+            
+            // Update duration periodically (in case it wasn't loaded initially)
+            if (videoId === lastVideoId && videoDuration === 0) {
+                const duration = getVideoDuration();
+                if (duration > 0) {
+                    videoDuration = duration;
+                    console.log(`[LifeOS YT] Duration updated: ${duration}s`);
+                }
             }
         }
-    }, 3000);
+    }, 5000); // Check every 5 seconds
 
     // ── YouTube SPA Navigation ───────────────────────────────
     window.addEventListener('yt-navigate-finish', () => {
         if (!isContextValid()) return;
         checkShortsRedirect();
 
+        // Stop progress tracking for previous video
+        stopProgressTracking();
+
         // Clear previous video's classification
         chrome.storage.local.set({ 'yt_current_classification': 'pending' });
 
-        // Reset last video so the new one gets reported
+        // Reset state for new video
         lastVideoId = null;
         lastTitle = null;
+        videoDuration = 0;
+        currentChapterMatch = null;
+        
         // Small delay to let the new page title settle
-        setTimeout(reportVideoInfo, 300);
+        setTimeout(reportVideoInfo, 500);
     });
 
     // ── Fallback: Title mutation observer ────────────────────
