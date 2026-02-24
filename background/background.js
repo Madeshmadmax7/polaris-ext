@@ -218,7 +218,8 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 //  3. IDLE STATE DETECTION
 // ═══════════════════════════════════════════════════════════
 
-chrome.idle.setDetectionInterval(600);
+// Detect idle after 60 seconds of no mouse/keyboard activity
+chrome.idle.setDetectionInterval(60);
 
 chrome.idle.onStateChanged.addListener(async (state) => {
     await initPromise;
@@ -226,9 +227,13 @@ chrome.idle.onStateChanged.addListener(async (state) => {
 
     if (state === 'active') {
         isUserActive = true;
-    } else if (state === 'locked') {
+        resumeTracking();
+    } else if (state === 'idle' || state === 'locked') {
+        // Pause tracking on BOTH idle and locked states
+        // idle = no mouse/keyboard for 60s, locked = screen locked / sleep
         isUserActive = false;
         pauseTracking();
+        console.log(`[Idle] Paused tracking: ${state}`);
     }
 });
 
@@ -250,6 +255,22 @@ async function handleTabChange(tabId) {
         
         if (!tab.url || tab.url.startsWith('chrome://')) {
             console.log(`[Track] Skipping non-trackable URL`);
+            activeTabId = null;
+            activeTabDomain = '';
+            currentPageTitle = null;
+            await chrome.storage.local.set({
+                'yt_current_classification': 'none',
+                'site_auto_classification': 'none',
+            });
+            await saveSessionState();
+            sendLiveActivity({ domain: '', status: 'stopped' });
+            return;
+        }
+
+        // Skip localhost / 127.0.0.1 — our own app pages shouldn't be tracked
+        const rawHostname = new URL(tab.url).hostname.toLowerCase();
+        if (rawHostname === '127.0.0.1' || rawHostname === 'localhost' || rawHostname === '0.0.0.0') {
+            console.log(`[Track] Skipping localhost/self: ${rawHostname}`);
             activeTabId = null;
             activeTabDomain = '';
             currentPageTitle = null;
@@ -311,6 +332,10 @@ async function handleTabChange(tabId) {
     }
 }
 
+// Max session duration cap (seconds). Since we flush every 30s,
+// any duration > 60s indicates the system was asleep/suspended.
+const MAX_SESSION_DURATION_SECONDS = 60;
+
 async function finalizeCurrentSession() {
     if (!activeTabDomain || !sessionStart || isFinalizing) {
         console.log(`[Track] Skip finalize: domain=${activeTabDomain}, session=${sessionStart}, finalizing=${isFinalizing}`);
@@ -320,12 +345,20 @@ async function finalizeCurrentSession() {
 
     try {
         const now = Date.now();
-        const duration = Math.floor((now - sessionStart) / 1000);
-        console.log(`[Track] Finalizing: ${activeTabDomain}, duration=${duration}s`);
+        let duration = Math.floor((now - sessionStart) / 1000);
+        console.log(`[Track] Finalizing: ${activeTabDomain}, raw duration=${duration}s`);
 
         if (duration < 1) {
             isFinalizing = false;
             return;
+        }
+
+        // CAP duration to handle laptop sleep/suspend/idle gaps
+        // Since we flush every 30s, anything over 60s means the system was
+        // suspended and this isn't real active time.
+        if (duration > MAX_SESSION_DURATION_SECONDS) {
+            console.log(`[Track] Duration capped: ${duration}s → ${MAX_SESSION_DURATION_SECONDS}s (system was likely suspended)`);
+            duration = MAX_SESSION_DURATION_SECONDS;
         }
 
         // Capture data BEFORE reset
@@ -559,6 +592,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     }
                     return { ack: true };
 
+                case 'SET_PENDING_CHAPTER':
+                    // Frontend signals which chapter user is searching YouTube for
+                    if (message.data) {
+                        await chrome.storage.local.set({ 'pending_chapter': message.data });
+                        console.log(`[Pending] Stored pending chapter: plan=${message.data.plan_id}, ch=${message.data.chapter_index}`);
+                    }
+                    return { ack: true };
+
                 case 'BLOCK_DOMAIN':
                     await blockDomain(message.data.domain);
                     if (activeTabId) {
@@ -599,9 +640,68 @@ async function matchVideoToChapter(videoData) {
         }
 
         const { auth_token } = await chrome.storage.local.get('auth_token');
-        if (!auth_token) return null;
+        if (!auth_token) {
+            console.log('[Match] No auth token - cannot match');
+            return null;
+        }
 
-        // Fetch active study plans
+        // ── STEP 1: Check PENDING chapter assignment (highest priority) ──
+        // This is set when user clicks "Search on YouTube" from a specific chapter.
+        try {
+            const pendingResponse = await fetch('http://127.0.0.1:8000/api/ai/pending-chapter', {
+                headers: {
+                    'Authorization': `Bearer ${auth_token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (pendingResponse.ok) {
+                const pendingData = await pendingResponse.json();
+                if (pendingData.pending) {
+                    const p = pendingData.pending;
+                    console.log(`[Match] PENDING chapter found: "${p.chapter_title}" (plan=${p.plan_id}, ch=${p.chapter_index})`);
+
+                    // Directly assign video to pending chapter
+                    const setVideoResponse = await fetch(`http://127.0.0.1:8000/api/ai/study-plan/${p.plan_id}/chapter/${p.chapter_index}/set-video`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${auth_token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            video_url: videoData.video_url,
+                            video_duration_seconds: videoData.duration_seconds || 0,
+                            video_id: videoData.videoId,
+                            video_title: videoData.title,
+                            creator_name: videoData.channel_name
+                        })
+                    });
+
+                    if (setVideoResponse.ok) {
+                        console.log(`[Match] ✓ Pending match: "${videoData.title}" → "${p.chapter_title}"`);
+                        return {
+                            plan_id: p.plan_id,
+                            chapter_index: p.chapter_index,
+                            chapter_title: p.chapter_title,
+                            matched: true,
+                            match_type: 'pending'
+                        };
+                    }
+
+                    // Even if set-video failed (e.g., completed chapter lock), still return match for tracking
+                    return {
+                        plan_id: p.plan_id,
+                        chapter_index: p.chapter_index,
+                        chapter_title: p.chapter_title,
+                        matched: true,
+                        match_type: 'pending_rewatch'
+                    };
+                }
+            }
+        } catch (e) {
+            console.debug('[Match] Pending check failed:', e.message);
+        }
+
+        // ── STEP 2: Fetch study plans and do intelligent matching ──
         const response = await fetch('http://127.0.0.1:8000/api/ai/study-plans', {
             headers: {
                 'Authorization': `Bearer ${auth_token}`,
@@ -609,16 +709,37 @@ async function matchVideoToChapter(videoData) {
             }
         });
 
-        if (!response.ok) return null;
+        if (!response.ok) {
+            console.log(`[Match] Failed to fetch plans: ${response.status}`);
+            return null;
+        }
 
         const plans = await response.json();
-        if (!plans || plans.length === 0) return null;
+        if (!plans || plans.length === 0) {
+            console.log('[Match] No study plans found');
+            return null;
+        }
 
         const videoTitle = (videoData.title || '').toLowerCase();
         const videoTitleWords = videoTitle.split(/\s+/).filter(w => w.length > 2);
+        const channelName = (videoData.channel_name || '').toLowerCase();
 
-        // Check each plan's chapters
+        let globalBestMatch = null;
+        let globalBestScore = 0;
+
         for (const plan of plans) {
+            // ── Plan-level topic check ──
+            const planTitle = (plan.title || '').toLowerCase();
+            const planGoal = (plan.goal || '').toLowerCase();
+            const planText = planTitle + ' ' + planGoal;
+            const planWords = planText.split(/\s+/).filter(w => w.length > 2);
+
+            // Check if video is related to this plan at all
+            const planMatchCount = videoTitleWords.filter(vw =>
+                planWords.some(pw => pw.includes(vw) || vw.includes(pw))
+            ).length;
+            const planRelevant = planMatchCount >= 1; // At least 1 common word with plan
+
             // Fetch progress for this plan
             const progressResponse = await fetch(`http://127.0.0.1:8000/api/ai/study-plan/${plan.id}/progress`, {
                 headers: {
@@ -633,77 +754,106 @@ async function matchVideoToChapter(videoData) {
             const chapters = progress.chapters || [];
 
             // Find BEST matching chapter using AI-generated importance scores
-            let bestMatch = null;
-            let bestScore = 0;
-
             for (const chapter of chapters) {
-                if (chapter.is_completed) continue; // Skip completed chapters
-
                 const chapterTitle = (chapter.chapter_title || '').toLowerCase();
                 const keywordImportance = chapter.keyword_importance || {};
                 
-                // Calculate weighted match score using AI importance
-                let totalImportance = 0;
-                let matchedImportance = 0;
+                // Threshold is lower for incomplete chapters, even lower for plan-relevant videos
+                const isIncomplete = !chapter.is_completed;
+                const baseThreshold = isIncomplete ? 20 : 35; // 20% for incomplete, 35% for completed (re-watch)
+                const threshold = planRelevant ? Math.max(baseThreshold - 10, 10) : baseThreshold; // min 10% for plan-relevant incomplete
+                
+                let matchPercentage = 0;
                 let matchedKeywords = [];
 
-                // If AI provided importance scores, use them
                 if (Object.keys(keywordImportance).length > 0) {
+                    let totalImportance = 0;
+                    let matchedImportance = 0;
+
                     for (const [keyword, importance] of Object.entries(keywordImportance)) {
                         const keywordLower = keyword.toLowerCase();
                         totalImportance += importance;
                         
-                        // Check if video title contains this keyword
-                        if (videoTitleWords.some(w => w.includes(keywordLower) || keywordLower.includes(w))) {
+                        // Check if video title OR channel name contains this keyword
+                        const titleMatch = videoTitleWords.some(w => w.includes(keywordLower) || keywordLower.includes(w));
+                        const channelMatch = channelName && (channelName.includes(keywordLower) || keywordLower.includes(channelName));
+                        
+                        if (titleMatch || channelMatch) {
                             matchedImportance += importance;
                             matchedKeywords.push(`${keyword}(${importance})`);
                         }
                     }
                     
-                    // Calculate importance-weighted percentage
-                    const matchPercentage = totalImportance > 0 ? (matchedImportance / totalImportance) * 100 : 0;
-                    
-                    // STRICT: Require 60%+ weighted match
-                    if (matchPercentage >= 60) {
-                        const score = matchedImportance; // Use weighted score
-                        
-                        if (score > bestScore) {
-                            bestScore = score;
-                            bestMatch = {
-                                chapter: chapter,
-                                percentage: matchPercentage,
-                                keywords: matchedKeywords
-                            };
-                        }
-                    }
+                    matchPercentage = totalImportance > 0 ? (matchedImportance / totalImportance) * 100 : 0;
                 } else {
                     // Fallback: Basic word matching if no AI importance scores
                     const chapterWords = chapterTitle.split(/\s+/).filter(w => w.length > 2);
-                    const commonWords = videoTitleWords.filter(w => chapterWords.some(cw => cw.includes(w) || w.includes(cw)));
+                    const commonWords = videoTitleWords.filter(w =>
+                        chapterWords.some(cw => cw.includes(w) || w.includes(cw))
+                    );
+                    matchPercentage = chapterWords.length > 0 ? (commonWords.length / chapterWords.length) * 100 : 0;
+                    matchedKeywords = commonWords;
+                }
+                
+                // ── Supplementary: direct chapter-title word overlap (catches cases where keyword_importance misses obvious matches) ──
+                const chapterTitleWords = chapterTitle.split(/\s+/).filter(w => w.length > 2);
+                const directCommon = videoTitleWords.filter(w =>
+                    chapterTitleWords.some(cw => cw.includes(w) || w.includes(cw))
+                );
+                const directPct = chapterTitleWords.length > 0 ? (directCommon.length / chapterTitleWords.length) * 100 : 0;
+                if (directPct > matchPercentage) {
+                    console.log(`[Match] Direct title overlap for "${chapter.chapter_title}": ${directPct.toFixed(0)}% (${directCommon.join(', ')}) > keyword score ${matchPercentage.toFixed(0)}%`);
+                    matchPercentage = directPct;
+                    matchedKeywords = directCommon.map(w => `${w}(direct)`);
+                }
+
+                console.log(`[Match] Chapter "${chapter.chapter_title}": score=${matchPercentage.toFixed(0)}% threshold=${threshold}% keywords=[${matchedKeywords.join(', ')}]`);
+
+                if (matchPercentage >= threshold) {
+                    // Score: weighted importance + bonus for incomplete chapters + bonus for plan relevance
+                    let score = matchPercentage;
+                    if (isIncomplete) score += 50; // Strongly prefer incomplete chapters
+                    if (planRelevant) score += 20; // Bonus for plan-relevant videos
                     
-                    if (commonWords.length >= 2) {
-                        const matchPercentage = (commonWords.length / chapterWords.length) * 100;
-                        if (matchPercentage >= 60) {
-                            const score = commonWords.length * matchPercentage;
-                            if (score > bestScore) {
-                                bestScore = score;
-                                bestMatch = {
-                                    chapter: chapter,
-                                    percentage: matchPercentage,
-                                    keywords: commonWords
-                                };
-                            }
-                        }
+                    if (score > globalBestScore) {
+                        globalBestScore = score;
+                        globalBestMatch = {
+                            plan: plan,
+                            chapter: chapter,
+                            percentage: matchPercentage,
+                            keywords: matchedKeywords,
+                            isRewatch: chapter.is_completed
+                        };
                     }
                 }
             }
 
-            // If found a good match, update it
-            if (bestMatch) {
-                console.log(`[Match] Video "${videoData.title}" → Chapter "${bestMatch.chapter.chapter_title}" (${bestMatch.percentage.toFixed(0)}% weighted match: ${bestMatch.keywords.join(', ')})`);
+            // ── FALLBACK: If plan is relevant but no specific chapter matched, use first incomplete ──
+            if (!globalBestMatch && planRelevant) {
+                const firstIncomplete = chapters.find(c => !c.is_completed);
+                if (firstIncomplete) {
+                    console.log(`[Match] Plan-level match: "${videoData.title}" → first incomplete chapter "${firstIncomplete.chapter_title}" in plan "${plan.title}"`);
+                    globalBestMatch = {
+                        plan: plan,
+                        chapter: firstIncomplete,
+                        percentage: 0,
+                        keywords: [`plan-match(${planMatchCount})`],
+                        isRewatch: false
+                    };
+                    globalBestScore = 30; // Low score but valid
+                }
+            }
+        }
 
-                // Send video details to backend
-                const setVideoResponse = await fetch(`http://127.0.0.1:8000/api/ai/study-plan/${plan.id}/chapter/${bestMatch.chapter.chapter_index}/set-video`, {
+        // ── STEP 3: Apply best match ──
+        if (globalBestMatch) {
+            const { plan, chapter, percentage, keywords, isRewatch } = globalBestMatch;
+
+            console.log(`[Match] ✓ Video "${videoData.title}" → Chapter "${chapter.chapter_title}" (${percentage.toFixed(0)}% match: ${keywords.join(', ')}${isRewatch ? ' [RE-WATCH]' : ''})`);
+
+            // Send video details to backend (set-video will handle locks for completed chapters)
+            try {
+                await fetch(`http://127.0.0.1:8000/api/ai/study-plan/${plan.id}/chapter/${chapter.chapter_index}/set-video`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${auth_token}`,
@@ -717,20 +867,20 @@ async function matchVideoToChapter(videoData) {
                         creator_name: videoData.channel_name
                     })
                 });
-
-                if (setVideoResponse.ok) {
-                    return {
-                        plan_id: plan.id,
-                        chapter_index: bestMatch.chapter.chapter_index,
-                        chapter_title: bestMatch.chapter.chapter_title,
-                        matched: true
-                    };
-                }
-            } else {
-                console.log(`[Match] No strict match found for "${videoData.title}" (need 60%+ match with 2+ unique keywords)`);
+            } catch (e) {
+                console.debug('[Match] set-video call failed:', e.message);
             }
+
+            return {
+                plan_id: plan.id,
+                chapter_index: chapter.chapter_index,
+                chapter_title: chapter.chapter_title,
+                matched: true,
+                match_type: isRewatch ? 'rewatch' : 'keyword'
+            };
         }
 
+        console.log(`[Match] No match found for "${videoData.title}" (checked ${plans.length} plans)`);
         return null;
     } catch (error) {
         console.error('[Match] Error matching video to chapter:', error);
@@ -761,13 +911,34 @@ async function init() {
         initWebSocket();
     }
 
+    // Validate restored session: discard stale sessions (system was asleep)
+    if (sessionStart) {
+        const staleMs = Date.now() - sessionStart;
+        if (staleMs > MAX_SESSION_DURATION_SECONDS * 1000) {
+            console.log(`[LifeOS] Discarding stale session: ${Math.round(staleMs / 1000)}s old (max ${MAX_SESSION_DURATION_SECONDS}s)`);
+            sessionStart = null;
+            activeTabId = null;
+            activeTabDomain = '';
+            currentPageTitle = null;
+            await saveSessionState();
+        }
+    }
+
     // Verify persisted state matches CURRENT active tab
     try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (tab && tab.url && !tab.url.startsWith('chrome://')) {
             const currentDomain = sanitizeUrl(tab.url);
 
-            if (!activeTabId) {
+            // Skip localhost/self pages
+            const hostname = new URL(tab.url).hostname.toLowerCase();
+            if (hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '0.0.0.0') {
+                activeTabId = null;
+                activeTabDomain = '';
+                sessionStart = null;
+                currentPageTitle = null;
+                await saveSessionState();
+            } else if (!activeTabId) {
                 activeTabId = tab.id;
                 activeTabDomain = currentDomain;
                 sessionStart = Date.now();

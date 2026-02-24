@@ -40,11 +40,14 @@
 
     let lastVideoId = null;
     let lastTitle = null;
+    let lastChannelName = null; // Current video's channel - retried until found
     let trackingInterval = null;
     let titleObserver = null;
     let videoDuration = 0;
     let currentChapterMatch = null;
     let progressTrackingInterval = null;
+    let channelRetryInterval = null; // Retry until channel name is found
+    let delayedReportVideoId = null; // Guard: only one 3s delayed block per video
 
     /**
      * Safety check for extension context.
@@ -103,26 +106,70 @@
     }
 
     /**
+     * Check if a YouTube ad is currently playing.
+     * During ads, video.duration and .ytp-time-duration show AD duration, not the real video.
+     */
+    function isAdPlaying() {
+        try {
+            const player = document.querySelector('#movie_player');
+            return player && (
+                player.classList.contains('ad-showing') ||
+                player.classList.contains('ad-interrupting')
+            );
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /**
      * Get video duration in seconds from YouTube player.
+     * Returns 0 if an ad is playing (to avoid capturing ad duration as video duration).
      */
     function getVideoDuration() {
         try {
-            // Method 1: Try to get from video element
-            const videoElement = document.querySelector('video');
-            if (videoElement && videoElement.duration && !isNaN(videoElement.duration)) {
-                return Math.floor(videoElement.duration);
-            }
+            // CRITICAL: During ads, both video.duration and .ytp-time-duration show AD length
+            if (isAdPlaying()) return 0;
 
-            // Method 2: Try to parse from duration text
+            // Method 1: Parse from duration text element (most reliable for main video)
             const durationElement = document.querySelector('.ytp-time-duration');
             if (durationElement && durationElement.textContent) {
-                return parseDurationText(durationElement.textContent);
+                const parsed = parseDurationText(durationElement.textContent);
+                if (parsed > 0) return parsed;
+            }
+
+            // Method 2: video element duration
+            const videoElement = document.querySelector('video.html5-main-video') || document.querySelector('video');
+            if (videoElement && videoElement.duration && !isNaN(videoElement.duration) && isFinite(videoElement.duration)) {
+                return Math.floor(videoElement.duration);
             }
 
             return 0;
         } catch (e) {
             return 0;
         }
+    }
+
+    /**
+     * Wait for a valid video duration (handles ads, slow metadata loading).
+     * Checks every 2 seconds until duration > 0 or maxWaitMs exceeded.
+     */
+    function waitForValidDuration(maxWaitMs) {
+        return new Promise((resolve) => {
+            const dur = getVideoDuration();
+            if (dur > 0) { resolve(dur); return; }
+            const start = Date.now();
+            const check = setInterval(() => {
+                const d = getVideoDuration();
+                if (d > 0) {
+                    clearInterval(check);
+                    resolve(d);
+                } else if (Date.now() - start > maxWaitMs) {
+                    clearInterval(check);
+                    console.log(`[LifeOS YT] Duration wait timed out after ${maxWaitMs / 1000}s`);
+                    resolve(0);
+                }
+            }, 2000);
+        });
     }
 
     /**
@@ -227,12 +274,43 @@
     }
 
     /**
+     * Start a retry loop to find the channel name once YouTube's SPA has rendered it.
+     * Stops once found or after 30 seconds.
+     */
+    function startChannelNameRetry(onFound) {
+        if (channelRetryInterval) clearInterval(channelRetryInterval);
+        let retries = 0;
+        const maxRetries = 15; // 15 x 2s = 30s max
+        channelRetryInterval = setInterval(() => {
+            retries++;
+            const name = getChannelName();
+            if (name) {
+                lastChannelName = name;
+                clearInterval(channelRetryInterval);
+                channelRetryInterval = null;
+                console.log(`[LifeOS YT] Channel name found (retry ${retries}): ${name}`);
+                onFound(name);
+            } else if (retries >= maxRetries) {
+                clearInterval(channelRetryInterval);
+                channelRetryInterval = null;
+                console.log('[LifeOS YT] Channel name retry exhausted');
+            }
+        }, 2000);
+    }
+
+    /**
      * Send current video progress to backend.
      * Uses exact video.currentTime (no logic, strictly time).
      */
     async function sendProgressUpdate(chapterMatch, videoEnded) {
         try {
-            // PRECAUTION: Verify video is still productive before updating (Issue #1)
+            // Skip progress updates during ads (ad currentTime ≠ real video progress)
+            if (isAdPlaying()) {
+                console.log('[LifeOS YT] Ad playing - skipping progress update');
+                return;
+            }
+
+            // PRECAUTION: Verify video is still productive before updating
             const videoTitle = getVideoTitle();
             const currentClassification = classifyVideo(videoTitle);
             
@@ -245,19 +323,34 @@
             const videoElement = document.querySelector('video');
             if (!videoElement) return;
 
-            // Get EXACT current time from video player (strictly only time, no logic)
+            // Auto-correct duration if it changed (e.g., ad finished, metadata loaded late)
+            const latestDuration = getVideoDuration();
+            if (latestDuration > 0 && latestDuration !== videoDuration) {
+                console.log(`[LifeOS YT] Duration corrected: ${videoDuration}s → ${latestDuration}s`);
+                videoDuration = latestDuration;
+            }
+
+            // Don't send progress if we still have no valid duration
+            if (videoDuration <= 0) {
+                console.log('[LifeOS YT] Waiting for valid duration before sending progress...');
+                return;
+            }
+
+            // Get EXACT current time from video player
             const currentTime = Math.floor(videoElement.currentTime);
             
             // Skip if no meaningful progress
             if (currentTime < 1 && !videoEnded) return;
 
-            console.log(`[LifeOS YT] Progress: ${currentTime}s / ${videoDuration}s (${((currentTime / videoDuration) * 100).toFixed(1)}%)${videoEnded ? ' - VIDEO ENDED' : ''}`);
+            const pct = Math.min((currentTime / videoDuration) * 100, 100).toFixed(1);
+            console.log(`[LifeOS YT] Progress: ${currentTime}s / ${videoDuration}s (${pct}%)${videoEnded ? ' - VIDEO ENDED' : ''}`);
 
             // Get auth token
             const { auth_token } = await chrome.storage.local.get('auth_token');
             if (!auth_token) return;
 
-            // Send to backend API
+            // Send to backend API (include duration for server-side correction)
+            // Also send video_title and channel_name to backfill if missing
             const response = await fetch(`http://127.0.0.1:8000/api/ai/study-plan/${chapterMatch.plan_id}/chapter/${chapterMatch.chapter_index}/update-progress`, {
                 method: 'POST',
                 headers: {
@@ -266,7 +359,10 @@
                 },
                 body: JSON.stringify({
                     watched_seconds: currentTime,
-                    video_ended: videoEnded
+                    video_ended: videoEnded,
+                    video_duration_seconds: videoDuration,
+                    video_title: videoTitle || null,
+                    creator_name: lastChannelName || null
                 })
             });
 
@@ -305,6 +401,8 @@
 
         lastVideoId = videoId;
         lastTitle = title;
+        lastChannelName = null; // Reset channel name for this new video
+        if (channelRetryInterval) { clearInterval(channelRetryInterval); channelRetryInterval = null; }
 
         const classification = classifyVideo(title);
         
@@ -331,14 +429,42 @@
             console.debug('[LifeOS YT] Immediate send failed:', e.message);
         }
         
-        // DELAYED: Get video duration and channel name (wait for page to load)
-        setTimeout(() => {
-            const duration = getVideoDuration();
-            const channelName = getChannelName();
+        // DELAYED: Get video duration and channel name (wait for page + ads to finish)
+        setTimeout(async () => {
+            let channelName = getChannelName();
+            let duration = getVideoDuration();
+
+            // If duration is 0 (ad playing or metadata not loaded), wait for valid duration
+            if (duration === 0) {
+                console.log('[LifeOS YT] Duration not ready (ad may be playing), waiting...');
+                duration = await waitForValidDuration(60000); // Wait up to 60s
+            }
             
             videoDuration = duration;
+            
+            if (channelName) {
+                lastChannelName = channelName;
+            } else {
+                console.log('[LifeOS YT] Channel name not ready yet, will retry in background...');
+                // Start retry to update lastChannelName — progress updates will pick it up automatically
+                startChannelNameRetry((foundName) => {
+                    // lastChannelName is already updated inside startChannelNameRetry
+                    // The next progress update (every 10s) will send it to backend
+                    console.log(`[LifeOS YT] Channel name resolved: ${foundName} — will be sent on next progress update`);
+                });
+            }
+            
+            console.log(`[LifeOS YT] Duration: ${duration}s (${Math.floor(duration/60)}m ${duration%60}s) | Channel: ${channelName || '(retrying...)'}`);
 
-            console.log(`[LifeOS YT] Duration updated: ${duration}s | Channel: ${channelName}`);
+            if (!isContextValid()) return;
+
+            // Once-per-video gate: if we already sent the full report for this videoId, skip.
+            // Checked inside the callback so it survives yt-navigate-finish resets outside.
+            if (delayedReportVideoId === videoId) {
+                console.log(`[LifeOS YT] Full report already sent for ${videoId}, skipping duplicate`);
+                return;
+            }
+            delayedReportVideoId = videoId;
 
             try {
                 chrome.runtime.sendMessage({
@@ -356,17 +482,19 @@
                         console.debug('[LifeOS YT] Delayed message failed:', chrome.runtime.lastError.message);
                     } else if (response && response.chapter_match) {
                         currentChapterMatch = response.chapter_match;
-                        console.log(`[LifeOS YT] Matched to chapter: ${currentChapterMatch.chapter_title}`);
+                        console.log(`[LifeOS YT] Matched to chapter: ${currentChapterMatch.chapter_title}${currentChapterMatch.match_type === 'rewatch' || currentChapterMatch.match_type === 'pending_rewatch' ? ' [RE-WATCH]' : ''}`);
                         
-                        // START REAL-TIME PROGRESS TRACKING
+                        // START REAL-TIME PROGRESS TRACKING (even for re-watches — for analytics)
                         startProgressTracking(currentChapterMatch);
+                    } else {
+                        console.log('[LifeOS YT] No chapter match returned from background');
                     }
                 });
             } catch (e) {
                 // Extension context invalidated
                 console.debug('[LifeOS YT] Delayed send failed:', e.message);
             }
-        }, 2000); // Wait 2 seconds for video player to load
+        }, 3000); // Wait 3 seconds for video player to load
     }
 
     /**
@@ -415,14 +543,21 @@
         // Stop progress tracking for previous video
         stopProgressTracking();
 
+        // Stop channel retry for previous video
+        if (channelRetryInterval) { clearInterval(channelRetryInterval); channelRetryInterval = null; }
+
         // Clear previous video's classification
         chrome.storage.local.set({ 'yt_current_classification': 'pending' });
 
         // Reset state for new video
         lastVideoId = null;
         lastTitle = null;
+        lastChannelName = null;
         videoDuration = 0;
         currentChapterMatch = null;
+        // NOTE: delayedReportVideoId intentionally NOT reset here — it is a once-per-videoId
+        // gate that prevents re-sending YOUTUBE_VIDEO_INFO even if yt-navigate-finish fires twice.
+        // A different videoId will naturally bypass it.
         
         // Small delay to let the new page title settle
         setTimeout(reportVideoInfo, 500);

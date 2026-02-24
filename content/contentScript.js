@@ -134,6 +134,15 @@
                 type: 'UPDATE_SETTING',
                 data: { key: 'blocking_mode', value: event.data.mode }
             }).catch(() => { });
+        } else if (event.data && event.data.type === 'LIFEOS_SET_PENDING_CHAPTER') {
+            // Frontend tells extension which chapter the user is searching a video for
+            console.log('[CS] Pending chapter set:', event.data.data);
+            sendMessageWithRetry({
+                type: 'SET_PENDING_CHAPTER',
+                data: event.data.data
+            }).then(() => {
+                window.postMessage({ type: 'LIFEOS_PENDING_CHAPTER_ACK' }, '*');
+            }).catch(() => { });
         }
     }
     window.addEventListener('message', handleWindowMessage);
