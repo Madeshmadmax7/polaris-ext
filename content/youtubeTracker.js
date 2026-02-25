@@ -15,6 +15,14 @@
         'tutorial', 'course', 'lecture', 'learn', 'learning', 'how to', 'explained',
         'walkthrough', 'study', 'education', 'class', 'lesson', 'training',
         'guide', 'documentation', 'workshop', 'bootcamp', 'masterclass',
+        'introduction', 'intro', 'beginner', 'basics', 'fundamentals', 'overview',
+        'crash course', 'complete guide', 'full course', 'for beginners', 'step by step',
+        // Web fundamentals
+        'html', 'css', 'web design', 'web development', 'web dev', 'webpage',
+        'website', 'markup', 'styling', 'responsive', 'flexbox', 'grid layout',
+        'bootstrap', 'tailwind', 'sass', 'scss', 'dom', 'semantic',
+        'accessibility', 'forms', 'tables', 'tags', 'attributes', 'selectors',
+        'w3schools', 'mdn', 'web standards',
         // CS / Programming
         'programming', 'coding', 'code', 'developer', 'software', 'web dev',
         'javascript', 'python', 'java', 'react', 'node', 'sql', 'database',
@@ -25,6 +33,12 @@
         'react native', 'angular', 'vue', 'django', 'flask', 'spring boot',
         'machine learning', 'deep learning', 'artificial intelligence',
         'neural network', 'nlp', 'computer vision', 'tensorflow', 'pytorch',
+        'hooks', 'context api', 'state management', 'lifecycle', 'props',
+        'component', 'express', 'mongodb', 'postgresql', 'redis', 'graphql',
+        'rest api', 'microservices', 'ci/cd', 'testing', 'debugging',
+        'object oriented', 'functional programming', 'async', 'promises',
+        'data science', 'pandas', 'numpy', 'matplotlib', 'jupyter',
+        'cybersecurity', 'networking', 'operating system', 'compiler',
         // Science & Math
         'physics', 'chemistry', 'biology', 'math', 'calculus', 'algebra',
         'statistics', 'probability', 'engineering', 'science',
@@ -48,6 +62,7 @@
     let progressTrackingInterval = null;
     let channelRetryInterval = null; // Retry until channel name is found
     let delayedReportVideoId = null; // Guard: only one 3s delayed block per video
+    let matchRetryInterval = null;    // Periodic retry until chapter is matched
 
     /**
      * Safety check for extension context.
@@ -188,6 +203,36 @@
             return 0;
         } catch (e) {
             return 0;
+        }
+    }
+
+    /**
+     * Extract video description from the YouTube page.
+     * Tries three selectors in order; returns first 300 chars or null.
+     */
+    function getVideoDescription() {
+        try {
+            // Method 1: meta description tag (populated early, reliable short summary)
+            const meta = document.querySelector("meta[name='description']");
+            if (meta && meta.content && meta.content.trim()) {
+                return meta.content.trim().slice(0, 300);
+            }
+
+            // Method 2: expanded description panel
+            const descPanel = document.querySelector("#description");
+            if (descPanel && descPanel.textContent && descPanel.textContent.trim()) {
+                return descPanel.textContent.trim().slice(0, 300);
+            }
+
+            // Method 3: secondary info renderer (older/alternative UI)
+            const secondary = document.querySelector("ytd-video-secondary-info-renderer");
+            if (secondary && secondary.textContent && secondary.textContent.trim()) {
+                return secondary.textContent.trim().slice(0, 300);
+            }
+
+            return null;
+        } catch (e) {
+            return null;
         }
     }
 
@@ -381,6 +426,72 @@
     }
 
     /**
+     * Stop periodic chapter-match retry.
+     */
+    function stopMatchRetry() {
+        if (matchRetryInterval) {
+            clearInterval(matchRetryInterval);
+            matchRetryInterval = null;
+            console.log('[LifeOS YT] Chapter match retry stopped');
+        }
+    }
+
+    /**
+     * Start periodic chapter-match retry every 15 seconds.
+     * Fires until a chapter match succeeds, the video changes, or the
+     * video is no longer productive. Does NOT touch the reportVideoInfo gate.
+     */
+    function startMatchRetry() {
+        if (matchRetryInterval) return; // already running
+        matchRetryInterval = setInterval(() => {
+            if (!isContextValid()) { stopMatchRetry(); return; }
+            if (!window.location.pathname.startsWith('/watch')) { stopMatchRetry(); return; }
+            if (currentChapterMatch) { stopMatchRetry(); return; } // already matched
+
+            const videoId = getVideoId();
+            const title   = getVideoTitle();
+            const duration = getVideoDuration() || videoDuration;
+
+            if (!videoId || !title || duration <= 0) return; // not ready yet
+
+            const classification = classifyVideo(title);
+            if (classification !== 'productive') { stopMatchRetry(); return; }
+
+            console.log(`[LifeOS YT] Retrying chapter match for "${title}" (15s retry)`);
+
+            try {
+                chrome.runtime.sendMessage({
+                    type: 'YOUTUBE_VIDEO_INFO',
+                    data: {
+                        title,
+                        videoId,
+                        classification,
+                        duration_seconds: duration,
+                        video_url: window.location.href,
+                        channel_name: lastChannelName || null,
+                    },
+                }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        console.debug('[LifeOS YT] Match retry failed:', chrome.runtime.lastError.message);
+                        return;
+                    }
+                    if (response && response.chapter_match) {
+                        currentChapterMatch = response.chapter_match;
+                        console.log(`[LifeOS YT] [Retry] Matched to chapter: ${currentChapterMatch.chapter_title}`);
+                        startProgressTracking(currentChapterMatch);
+                        stopMatchRetry();
+                    } else if (response && response.no_match_reason) {
+                        console.warn(`[LifeOS YT] [Retry] No match — reason: ${response.no_match_reason}`);
+                    }
+                });
+            } catch (e) {
+                console.debug('[LifeOS YT] Match retry send failed:', e.message);
+            }
+        }, 15000); // every 15 seconds
+        console.log('[LifeOS YT] Chapter match retry started (every 15s until matched)');
+    }
+
+    /**
      * Send video info to background script.
      */
     function reportVideoInfo() {
@@ -456,6 +567,9 @@
             
             console.log(`[LifeOS YT] Duration: ${duration}s (${Math.floor(duration/60)}m ${duration%60}s) | Channel: ${channelName || '(retrying...)'}`);
 
+            // Extract description now — page has had 3s to render it
+            const description = getVideoDescription();
+
             if (!isContextValid()) return;
 
             // Once-per-video gate: if we already sent the full report for this videoId, skip.
@@ -475,7 +589,8 @@
                         classification: classification,
                         duration_seconds: duration,
                         video_url: window.location.href,
-                        channel_name: channelName
+                        channel_name: channelName,
+                        description: description,
                     },
                 }, (response) => {
                     if (chrome.runtime.lastError) {
@@ -483,11 +598,15 @@
                     } else if (response && response.chapter_match) {
                         currentChapterMatch = response.chapter_match;
                         console.log(`[LifeOS YT] Matched to chapter: ${currentChapterMatch.chapter_title}${currentChapterMatch.match_type === 'rewatch' || currentChapterMatch.match_type === 'pending_rewatch' ? ' [RE-WATCH]' : ''}`);
-                        
+                        stopMatchRetry(); // matched — no more retries needed
                         // START REAL-TIME PROGRESS TRACKING (even for re-watches — for analytics)
                         startProgressTracking(currentChapterMatch);
+                    } else if (response && response.no_match_reason) {
+                        console.warn(`[LifeOS YT] No chapter match — reason: ${response.no_match_reason}. Open chrome://extensions → LifeOS → background page for similarity scores.`);
+                        startMatchRetry(); // begin 15s retry loop
                     } else {
                         console.log('[LifeOS YT] No chapter match returned from background');
+                        startMatchRetry(); // begin 15s retry loop
                     }
                 });
             } catch (e) {
@@ -542,6 +661,7 @@
 
         // Stop progress tracking for previous video
         stopProgressTracking();
+        stopMatchRetry(); // cancel any pending chapter-match retries for old video
 
         // Stop channel retry for previous video
         if (channelRetryInterval) { clearInterval(channelRetryInterval); channelRetryInterval = null; }
@@ -578,4 +698,19 @@
     );
 
     console.log('[LifeOS] YouTube tracker loaded');
+
+    // ── ADDITIVE: Listen for re-classification requests from background ──────
+    // Triggered when the user wakes from sleep/idle so the current video is
+    // re-evaluated rather than keeping a potentially stale classification.
+    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+        if (message.type === 'RECHECK_CLASSIFICATION') {
+            if (!isContextValid()) { sendResponse({ ack: false }); return false; }
+            console.log('[LifeOS YT] RECHECK_CLASSIFICATION — re-evaluating current video after sleep/idle resume');
+            // Reset the once-per-videoId gate so reportVideoInfo sends the full report again
+            delayedReportVideoId = null;
+            reportVideoInfo();
+            sendResponse({ ack: true });
+        }
+        return false;
+    });
 })();
