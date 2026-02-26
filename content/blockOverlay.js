@@ -174,15 +174,19 @@ console.log('[LifeOS] blockOverlay.js ENTRY');
         const isYT = window.location.hostname.includes('youtube.com');
 
         overlay.innerHTML = `
-            <div style="background: rgba(255,255,255,0.05); padding: 50px; border-radius: 40px; border: 1px solid rgba(124, 92, 255, 0.2); box-shadow: 0 20px 80px rgba(0,0,0,0.8); max-width: 90%;">
-                <div style="font-size: 80px; margin-bottom: 20px;">🛡️</div>
-                <h1 style="font-size: 32px; color: #7c5cff; margin: 0 0 16px;">Focus Mode Active</h1>
-                <p style="font-size: 18px; color: #ccccff; margin: 0 0 32px; line-height: 1.6;">
+            <div style="background: rgba(255,255,255,0.05); padding: 60px; border-radius: 40px; border: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(20px); box-shadow: 0 40px 100px rgba(0,0,0,0.8); max-width: 90%;">
+                <div style="margin-bottom: 30px; opacity: 0.9;">
+                    <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                    </svg>
+                </div>
+                <h1 style="font-size: 32px; font-weight: 700; color: #fff; margin: 0 0 24px; letter-spacing: -0.02em;">Focus Mode Active</h1>
+                <p style="font-size: 18px; color: rgba(255,255,255,0.6); margin: 0 0 40px; line-height: 1.8;">
                     ${isYT ? 'This video is classified as distracting.' : 'This site is classified as distracting.'} <br>
-                    Take a breath and get back to what matters.
+                    Redirect your energy towards your goals.
                 </p>
-                <button id="backBtn" style="background: #7c5cff; color: white; border: none; padding: 18px 40px; border-radius: 20px; font-weight: 800; font-size: 18px; cursor: pointer; transition: transform 0.2s;">
-                    ${isYT ? 'Back to YouTube Home' : 'Go Back to Work'}
+                <button id="backBtn" style="background: #fff; color: #000; border: none; padding: 20px 48px; border-radius: 30px; font-weight: 700; font-size: 16px; cursor: pointer; transition: all 0.3s; text-transform: uppercase; letter-spacing: 0.1em;">
+                    ${isYT ? 'RETURN TO HOME' : 'GO BACK TO WORK'}
                 </button>
             </div>
         `;

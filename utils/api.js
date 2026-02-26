@@ -72,13 +72,24 @@ export async function sendTrackingLog(logData) {
     });
 }
 
+// ═══════════════════════════════════════════════════════════
+// IMPORT Sanitize function (re-import to be safe or rely on caller)
+// NOTE: Since this is used in background.js, we should ideally sanitize there.
+// But for robustness, we'll strip 'queued_at' here.
+// ═══════════════════════════════════════════════════════════
+
 /**
  * Send batch tracking logs (from offline buffer).
  */
 export async function sendBatchLogs(logs) {
+    const cleanedLogs = logs.map(log => {
+        const { queued_at, ...cleaned } = log;
+        return cleaned;
+    });
+
     return apiRequest('/tracking/batch', {
         method: 'POST',
-        body: JSON.stringify({ logs }),
+        body: JSON.stringify({ logs: cleanedLogs }),
     });
 }
 

@@ -118,30 +118,30 @@
 
     // ── Expose status query for popup ─────────────────────
     function handleWindowMessage(event) {
-        if (event.data && event.data.type === 'LIFEOS_STATUS_REQUEST') {
+        if (event.data && event.data.type === 'POLARIS_STATUS_REQUEST') {
             sendMessageWithRetry({ type: 'GET_STATUS' })
                 .then(response => {
                     if (isContextValid()) {
                         window.postMessage({
-                            type: 'LIFEOS_STATUS_RESPONSE',
+                            type: 'POLARIS_STATUS_RESPONSE',
                             data: response.data,
                         }, '*');
                     }
                 })
                 .catch(() => { });
-        } else if (event.data && event.data.type === 'LIFEOS_SET_MODE') {
+        } else if (event.data && event.data.type === 'POLARIS_SET_MODE') {
             sendMessageWithRetry({
                 type: 'UPDATE_SETTING',
                 data: { key: 'blocking_mode', value: event.data.mode }
             }).catch(() => { });
-        } else if (event.data && event.data.type === 'LIFEOS_SET_PENDING_CHAPTER') {
+        } else if (event.data && event.data.type === 'POLARIS_SET_PENDING_CHAPTER') {
             // Frontend tells extension which chapter the user is searching a video for
             console.log('[CS] Pending chapter set:', event.data.data);
             sendMessageWithRetry({
                 type: 'SET_PENDING_CHAPTER',
                 data: event.data.data
             }).then(() => {
-                window.postMessage({ type: 'LIFEOS_PENDING_CHAPTER_ACK' }, '*');
+                window.postMessage({ type: 'POLARIS_PENDING_CHAPTER_ACK' }, '*');
             }).catch(() => { });
         }
     }

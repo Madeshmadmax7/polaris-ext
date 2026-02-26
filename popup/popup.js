@@ -260,33 +260,32 @@ function renderStudyPlans(plans) {
                             return `
                                 <div class="chapter-item ${isCompleted ? 'completed' : ''}">
                                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                                        <div style="display: flex; align-items: center; gap: 6px;">
-                                            <span class="chapter-check">${isCompleted ? '✓' : '○'}</span>
-                                            <span class="chapter-name">${chapter.title}</span>
+                                        <div style="display: flex; align-items: center; gap: 12px;">
+                                            <span style="font-size: 16px; opacity: ${isCompleted ? '1' : '0.2'};">${isCompleted ? '✓' : '○'}</span>
+                                            <span class="chapter-name" style="font-weight: ${isCompleted ? '600' : '400'};">${chapter.title}</span>
                                         </div>
-                                        ${hasVideo ? `<span style="font-size: 10px; color: var(--text-muted);">${Math.round(watchProgress)}%</span>` : ''}
+                                        ${hasVideo ? `<span style="font-size: 9px; opacity: 0.5; font-weight: 700;">${Math.round(watchProgress)}%</span>` : ''}
                                     </div>
                                     ${hasVideo ? `
-                                        <div style="width: 100%; height: 3px; background: var(--bg-elevated); border-radius: 2px; margin-top: 4px; overflow: hidden;">
-                                            <div style="width: ${watchProgress}%; height: 100%; background: linear-gradient(90deg, var(--color-primary), var(--color-secondary)); transition: width 0.3s ease;"></div>
+                                        <div style="width: 100%; height: 2px; background: rgba(255, 255, 255, 0.05); border-radius: 1px; overflow: hidden; margin-top: 4px;">
+                                            <div style="width: ${watchProgress}%; height: 100%; background: #ffffff; transition: width 0.3s ease;"></div>
                                         </div>
                                     ` : ''}
                                 </div>
                             `;
                         }).join('')}
-                        ${chapters.length > 3 ? `<div class="chapters-more">+${chapters.length - 3} more</div>` : ''}
+                        ${chapters.length > 3 ? `<div class="chapters-more" style="font-size: 10px; color: var(--text-secondary); margin-top: 12px; font-weight: 600;">+${chapters.length - 3} MORE</div>` : ''}
                     </div>
                 ` : ''}
 
                 ${quizUnlocked ? `
-                    <div class="quiz-badge">
-                        <span class="badge-icon">🎯</span>
-                        <span>Quiz Unlocked!</span>
+                    <div class="quiz-badge" style="display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);">
+                        <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em;">Quiz Unlocked!</span>
                     </div>
                 ` : ''}
 
                 <a href="http://127.0.0.1:5173/learning" target="_blank" class="plan-link">
-                    View Full Plan →
+                    View Full Plan
                 </a>
             </div>
         `;
@@ -309,15 +308,21 @@ async function refreshTrackingStatus() {
 
         if (response && response.data) {
             const d = response.data;
-            trackingStatus.textContent = d.isTracking ? 'Active' : 'Paused';
-            trackingStatus.className = `status-badge ${d.isTracking ? 'active' : 'paused'}`;
+            if (d.isDashboard) {
+                trackingStatus.textContent = 'Dashboard';
+                trackingStatus.className = 'status-badge active';
+                currentDomain.textContent = 'Polaris System';
+            } else {
+                trackingStatus.textContent = d.isTracking ? 'Active' : 'Paused';
+                trackingStatus.className = `status-badge ${d.isTracking ? 'active' : 'paused'}`;
+                currentDomain.textContent = d.domain || '—';
+            }
             
-            currentDomain.textContent = d.domain || '—';
-            activeStatus.textContent = d.isActive ? '✓ Yes' : '✗ No';
-            activeStatus.style.color = d.isActive ? '#00ff88' : '#ff6b6b';
+            activeStatus.textContent = d.isActive ? 'YES' : 'NO';
+            activeStatus.style.opacity = d.isActive ? '1' : '0.4';
             queueSize.textContent = d.queueSize || '0';
-            wsStatus.textContent = d.wsConnected ? 'Connected' : 'Disconnected';
-            wsStatus.style.color = d.wsConnected ? '#00ff88' : '#ff6b6b';
+            wsStatus.textContent = d.wsConnected ? 'LIVE' : 'OFFLINE';
+            wsStatus.style.opacity = d.wsConnected ? '1' : '0.4';
             statusDot.className = `status-indicator ${d.wsConnected ? 'connected' : 'disconnected'}`;
 
             // Update Block Button (only if tracking tab is visible)
@@ -335,7 +340,7 @@ async function refreshTrackingStatus() {
     }
 }
 
-// ── Manual Blocking ────────────────────────────────────
+// Manual blocking
 blockBtn.addEventListener('click', async () => {
     const domain = currentDomain.textContent;
     if (!domain || domain === '—') return;

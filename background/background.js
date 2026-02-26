@@ -112,7 +112,7 @@ async function restoreSessionState() {
         tabSwitchCount = _session.tabSwitches || 0;
         tabPageTitles = _session.tabPageTitles || {};  // Restore per-tab titles
         ytTabClassifications = _session.ytTabClassifications || {};  // Restore YT classifications
-        console.log(`[LifeOS] Restored session: ${activeTabDomain}, started ${sessionStart ? new Date(sessionStart).toISOString() : 'null'}`);
+        console.log(`[Polaris] Restored session: ${activeTabDomain}, started ${sessionStart ? new Date(sessionStart).toISOString() : 'null'}`);
     }
 }
 
@@ -226,17 +226,10 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
     await initPromise;
     if (windowId === chrome.windows.WINDOW_ID_NONE) {
-        // User switched away from browser - wait 5 seconds before pausing
-        // (allows checking notifications, quick alt-tabs, etc.)
-        focusLossTimeout = setTimeout(() => {
-            isWindowFocused = false;
-            pauseTracking();
-        }, 5000); // 5 seconds tolerance
+        // Just record that window lost focus, but don't pause immediately.
+        // Let chrome.idle handle actual inactivity.
+        isWindowFocused = false;
     } else {
-        if (focusLossTimeout) {
-            clearTimeout(focusLossTimeout);
-            focusLossTimeout = null;
-        }
         isWindowFocused = true;
 
         try {
@@ -320,16 +313,13 @@ async function handleTabChange(tabId) {
         // Skip localhost / 127.0.0.1 — our own app pages shouldn't be tracked
         const rawHostname = new URL(tab.url).hostname.toLowerCase();
         if (rawHostname === '127.0.0.1' || rawHostname === 'localhost' || rawHostname === '0.0.0.0') {
-            console.log(`[Track] Skipping localhost/self: ${rawHostname}`);
-            activeTabId = null;
-            activeTabDomain = '';
-            currentPageTitle = null;
-            await chrome.storage.local.set({
-                'yt_current_classification': 'none',
-                'site_auto_classification': 'none',
-            });
+            console.log(`[Track] Dashboard detected: ${rawHostname}`);
+            activeTabId = tabId;
+            activeTabDomain = 'Polaris Dashboard';
+            sessionStart = Date.now(); // Keep active session for dashboard visibility
+            currentPageTitle = 'Dashboard';
             await saveSessionState();
-            sendLiveActivity({ domain: '', status: 'stopped' });
+            sendLiveActivity({ domain: 'dashboard', status: 'active' });
             return;
         }
 
@@ -484,14 +474,13 @@ function pauseTracking() {
 }
 
 function resumeTracking() {
-    if (isWindowFocused && activeTabId && !sessionStart) {
+    if (activeTabId && !sessionStart) {
         sessionStart = Date.now();
+        isUserActive = true;
+        isWindowFocused = true;
         saveSessionState();
         sendLiveActivity({ domain: activeTabDomain, status: 'active' });
-        // ADDITIVE: After waking from sleep/idle, ask YouTube content script to re-classify
-        // the current video. The content script has a once-per-video gate that prevents
-        // re-sending — RECHECK_CLASSIFICATION resets it so fresh NLP matching can run.
-        // 1 second delay gives the page time to be ready after wake.
+        
         if (activeTabDomain && activeTabDomain.includes('youtube.com') && activeTabId) {
             setTimeout(() => {
                 chrome.tabs.sendMessage(activeTabId, { type: 'RECHECK_CLASSIFICATION' }).catch(() => {});
@@ -657,6 +646,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         data: {
                             isTracking: !!sessionStart,
                             domain: activeTabDomain,
+                            isDashboard: activeTabDomain === 'Polaris Dashboard',
                             isActive: isUserActive,
                             isFocused: isWindowFocused,
                             queueSize: (await getQueue()).length,
@@ -664,6 +654,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                             blockingMode: await getSetting('blocking_mode', 'hard'),
                         },
                     };
+
+                case 'RESUME_TRACKING':
+                    resumeTracking();
+                    return { ack: true };
 
                 case 'LOGIN_SUCCESS':
                     initWebSocket();
