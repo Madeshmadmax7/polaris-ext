@@ -17,6 +17,8 @@
         'guide', 'documentation', 'workshop', 'bootcamp', 'masterclass',
         'introduction', 'intro', 'beginner', 'basics', 'fundamentals', 'overview',
         'crash course', 'complete guide', 'full course', 'for beginners', 'step by step',
+        'solve', 'solution', 'approach', 'optimal', 'brute force', 'time complexity',
+        'space complexity', 'big o', 'implementation', 'practice',
         // Web fundamentals
         'html', 'css', 'web design', 'web development', 'web dev', 'webpage',
         'website', 'markup', 'styling', 'responsive', 'flexbox', 'grid layout',
@@ -39,6 +41,22 @@
         'object oriented', 'functional programming', 'async', 'promises',
         'data science', 'pandas', 'numpy', 'matplotlib', 'jupyter',
         'cybersecurity', 'networking', 'operating system', 'compiler',
+        // DSA / Algorithms / Competitive Programming
+        'dynamic programming', 'dp', 'greedy', 'backtracking', 'recursion',
+        'binary search', 'two pointer', 'sliding window', 'divide and conquer',
+        'sorting', 'searching', 'hashing', 'hash map', 'hash table',
+        'tree', 'binary tree', 'bst', 'avl', 'heap', 'priority queue',
+        'graph', 'bfs', 'dfs', 'dijkstra', 'bellman', 'floyd', 'topological',
+        'linked list', 'stack', 'queue', 'deque', 'trie', 'segment tree',
+        'bit manipulation', 'union find', 'disjoint set',
+        'array', 'matrix', 'string', 'subsequence', 'subarray', 'subset',
+        'knapsack', 'fibonacci', 'memoization', 'tabulation',
+        'maximum sum', 'minimum sum', 'longest', 'shortest', 'path',
+        'adjacent', 'non-adjacent', 'elements', 'nodes', 'edges',
+        'striver', 'neetcode', 'codeforces', 'hackerrank', 'codechef',
+        'geeksforgeeks', 'gfg', 'interviewbit', 'coding ninja',
+        'take u forward', 'frog jump', 'house robber', 'coin change',
+        'climbing stairs', 'grid', 'palindrome', 'permutation', 'combination',
         // Science & Math
         'physics', 'chemistry', 'biology', 'math', 'calculus', 'algebra',
         'statistics', 'probability', 'engineering', 'science',
@@ -47,7 +65,7 @@
         'interview prep', 'campus', 'semester', 'university', 'college',
         // Professional
         'portfolio', 'resume', 'career', 'freelance', 'project', 'showcase',
-        // Tech news (if requested, but usually learning-adjacent)
+        // Tech news
         'mkbhd', 'technology', 'tech news', 'future of', 'review', 'hands-on',
         'unboxing', 'comparison', 'specifications',
     ];
@@ -358,7 +376,7 @@
             // PRECAUTION: Verify video is still productive before updating
             const videoTitle = getVideoTitle();
             const currentClassification = classifyVideo(videoTitle);
-            
+
             if (currentClassification === 'distracting') {
                 console.log('[LifeOS YT] Distraction video detected - stopping progress tracking');
                 stopProgressTracking();
@@ -383,7 +401,7 @@
 
             // Get EXACT current time from video player
             const currentTime = Math.floor(videoElement.currentTime);
-            
+
             // Skip if no meaningful progress
             if (currentTime < 1 && !videoEnded) return;
 
@@ -413,10 +431,15 @@
 
             if (response.ok) {
                 const result = await response.json();
-                console.log(`[LifeOS YT] Progress updated: ${result.progress_percentage?.toFixed(1)}%${result.is_completed ? ' - COMPLETED ✓' : ''}`);
-                
-                // If completed, stop tracking
-                if (result.is_completed) {
+                const statusLabel = result.just_completed ? ' - JUST COMPLETED ✓'
+                    : result.was_already_completed ? ' (re-watch)'
+                        : '';
+                console.log(`[LifeOS YT] Progress updated: ${result.progress_percentage?.toFixed(1)}%${statusLabel}`);
+
+                // Only stop tracking if chapter was JUST completed in this update
+                // Don't stop for re-watches (was_already_completed = true)
+                if (result.just_completed) {
+                    console.log('[LifeOS YT] Chapter just completed — stopping tracking');
                     stopProgressTracking();
                 }
             }
@@ -449,7 +472,7 @@
             if (currentChapterMatch) { stopMatchRetry(); return; } // already matched
 
             const videoId = getVideoId();
-            const title   = getVideoTitle();
+            const title = getVideoTitle();
             const duration = getVideoDuration() || videoDuration;
 
             if (!videoId || !title || duration <= 0) return; // not ready yet
@@ -516,10 +539,19 @@
         if (channelRetryInterval) { clearInterval(channelRetryInterval); channelRetryInterval = null; }
 
         const classification = classifyVideo(title);
-        
+
         console.log(`[LifeOS YT] "${title}" → ${classification} (immediate classification)`);
-        
-        // IMMEDIATE: Send classification right away for blocking overlay
+
+        // IMMEDIATE: Write classification to storage so blockOverlay picks it up INSTANTLY
+        // This triggers the storage.onChanged listener in blockOverlay within ~100ms
+        try {
+            chrome.storage.local.set({ 'yt_current_classification': classification });
+            console.log(`[LifeOS YT] Set yt_current_classification = ${classification} (immediate)`);
+        } catch (e) {
+            console.debug('[LifeOS YT] Failed to set classification in storage:', e.message);
+        }
+
+        // IMMEDIATE: Also send to background for tracking/logging
         try {
             chrome.runtime.sendMessage({
                 type: 'YOUTUBE_VIDEO_INFO',
@@ -539,7 +571,7 @@
         } catch (e) {
             console.debug('[LifeOS YT] Immediate send failed:', e.message);
         }
-        
+
         // DELAYED: Get video duration and channel name (wait for page + ads to finish)
         setTimeout(async () => {
             let channelName = getChannelName();
@@ -550,9 +582,9 @@
                 console.log('[LifeOS YT] Duration not ready (ad may be playing), waiting...');
                 duration = await waitForValidDuration(60000); // Wait up to 60s
             }
-            
+
             videoDuration = duration;
-            
+
             if (channelName) {
                 lastChannelName = channelName;
             } else {
@@ -564,8 +596,8 @@
                     console.log(`[LifeOS YT] Channel name resolved: ${foundName} — will be sent on next progress update`);
                 });
             }
-            
-            console.log(`[LifeOS YT] Duration: ${duration}s (${Math.floor(duration/60)}m ${duration%60}s) | Channel: ${channelName || '(retrying...)'}`);
+
+            console.log(`[LifeOS YT] Duration: ${duration}s (${Math.floor(duration / 60)}m ${duration % 60}s) | Channel: ${channelName || '(retrying...)'}`);
 
             // Extract description now — page has had 3s to render it
             const description = getVideoDescription();
@@ -637,12 +669,12 @@
         if (window.location.pathname.startsWith('/watch')) {
             const videoId = getVideoId();
             const title = getVideoTitle();
-            
+
             // Only report if video changed
             if ((videoId && videoId !== lastVideoId) || (title && title !== lastTitle)) {
                 reportVideoInfo();
             }
-            
+
             // Update duration periodically (in case it wasn't loaded initially)
             if (videoId === lastVideoId && videoDuration === 0) {
                 const duration = getVideoDuration();
@@ -678,7 +710,7 @@
         // NOTE: delayedReportVideoId intentionally NOT reset here — it is a once-per-videoId
         // gate that prevents re-sending YOUTUBE_VIDEO_INFO even if yt-navigate-finish fires twice.
         // A different videoId will naturally bypass it.
-        
+
         // Small delay to let the new page title settle
         setTimeout(reportVideoInfo, 500);
     });

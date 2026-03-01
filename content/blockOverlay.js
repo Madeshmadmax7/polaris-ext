@@ -16,6 +16,7 @@ console.log('[LifeOS] blockOverlay.js ENTRY');
     let shadowRoot = null;
     let protectionObserver = null;
     let checkInterval = null;
+    let lastBlockState = null; // Track state to reduce log noise
 
     console.log('[LifeOS] blockOverlay.js SETUP');
 
@@ -88,10 +89,16 @@ console.log('[LifeOS] blockOverlay.js ENTRY');
                 if (isWatchPage && !isSearchPage) {
                     // Block if classified as 'distracting'
                     if (ytClass === 'distracting') {
-                        console.log('[LifeOS] Blocking distracting YouTube video');
+                        if (lastBlockState !== 'yt_blocked') {
+                            console.log('[LifeOS] Blocking distracting YouTube video');
+                            lastBlockState = 'yt_blocked';
+                        }
                         finalBlocked = true;
                     } else if (ytClass === 'productive') {
-                        console.log('[LifeOS] Allowing productive YouTube video');
+                        if (lastBlockState !== 'yt_allowed') {
+                            console.log('[LifeOS] Allowing productive YouTube video');
+                            lastBlockState = 'yt_allowed';
+                        }
                         finalBlocked = false; // Override even manual blocks for productive videos
                     }
                     // If 'pending' or 'none', don't change finalBlocked (keep manual block status)
