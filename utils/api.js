@@ -3,7 +3,7 @@
  * Handles all backend communication with retry logic.
  */
 
-const API_BASE = 'http://127.0.0.1:8000/api';
+const API_BASE = 'https://polaris-api-wf4d.onrender.com/api';
 
 /**
  * Get stored auth token.
