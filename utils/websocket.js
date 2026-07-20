@@ -4,7 +4,7 @@
  * Handles: blocking rule sync, reconnection, heartbeat.
  */
 
-const WS_URL = 'wss://polaris-api-wf4d.onrender.com/ws';
+const WS_URL = 'ws://localhost:8000/ws';
 
 let ws = null;
 let reconnectAttempts = 0;

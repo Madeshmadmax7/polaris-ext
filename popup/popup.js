@@ -1,9 +1,10 @@
 /**
- * LifeOS – Extension Popup Script
- * Sidebar with learning progress, study plans, and tracking status.
+ * Polaris – Extension Popup Script (V1)
+ * Tracking status + daily productivity score.
+ * [V2+] Learning tab with study plans commented out.
  */
 
-const API_BASE = 'https://polaris-api-wf4d.onrender.com/api';
+const API_BASE = 'http://localhost:8000/api';
 let authToken = null;
 
 // ── DOM Elements ────────────────────────────────────────
@@ -18,27 +19,20 @@ const userName = document.getElementById('userName');
 const statusDot = document.getElementById('statusDot');
 const refreshBtn = document.getElementById('refreshBtn');
 
-// Tabs
-const tabBtns = document.querySelectorAll('.tab-btn');
-const learningTab = document.getElementById('learningTab');
-const trackingTab = document.getElementById('trackingTab');
-
-// Learning Tab Elements
-const studyPlansList = document.getElementById('studyPlansList');
-const emptyState = document.getElementById('emptyState');
-const todayPercentage = document.getElementById('todayPercentage');
-const todayProgress = document.getElementById('todayProgress');
-const completedChapters = document.getElementById('completedChapters');
-const totalChapters = document.getElementById('totalChapters');
-const studyPlansCount = document.getElementById('studyPlansCount');
-
-// Tracking Tab Elements
+// Tracking Elements
 const trackingStatus = document.getElementById('trackingStatus');
 const currentDomain = document.getElementById('currentDomain');
 const activeStatus = document.getElementById('activeStatus');
 const queueSize = document.getElementById('queueSize');
 const wsStatus = document.getElementById('wsStatus');
 const blockBtn = document.getElementById('blockBtn');
+
+// [V1] Productivity Elements
+const productivityScore = document.getElementById('productivityScore');
+const scoreProgress = document.getElementById('scoreProgress');
+const totalActiveTime = document.getElementById('totalActiveTime');
+const productiveTime = document.getElementById('productiveTime');
+const distractingTime = document.getElementById('distractingTime');
 
 
 // ── API Helper ──────────────────────────────────────────
@@ -97,7 +91,7 @@ loginBtn.addEventListener('click', async () => {
         chrome.runtime.sendMessage({ type: 'LOGIN_SUCCESS' });
 
         showDashboard(data.user);
-        loadLearningData();
+        loadProductivityData();
     } catch (error) {
         authError.textContent = error.message;
     } finally {
@@ -127,169 +121,30 @@ function showDashboard(user) {
 }
 
 
-// ── Tab Navigation ──────────────────────────────────────
-tabBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-        const tabName = btn.dataset.tab;
-        
-        // Update active tab button
-        tabBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        
-        // Show corresponding tab content
-        learningTab.classList.remove('active');
-        trackingTab.classList.remove('active');
-        
-        if (tabName === 'learning') {
-            learningTab.classList.add('active');
-        } else if (tabName === 'tracking') {
-            trackingTab.classList.add('active');
-            refreshTrackingStatus();
-        }
-    });
-});
+// ── [V1] Productivity Score ─────────────────────────────
+function formatMinutes(totalMinutes) {
+    if (totalMinutes < 1) return '0m';
+    const h = Math.floor(totalMinutes / 60);
+    const m = Math.round(totalMinutes % 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
 
+async function loadProductivityData() {
+    if (!authToken) return;
 
-// ── Learning Data ───────────────────────────────────────
-async function loadLearningData() {
-    if (!authToken) {
-        console.log('[Popup] No auth token, skipping learning data load');
-        return;
-    }
-    
     try {
-        studyPlansList.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Loading...</p></div>';
-        
-        const [plans, allProgress] = await Promise.all([
-            apiRequest('/ai/study-plans'),
-            Promise.all([]).catch(() => []) // Will fetch individual progress below
-        ]);
+        const data = await apiRequest('/productivity/today');
+        const score = Math.round(data.productivity_score || 0);
 
-        if (!plans || plans.length === 0) {
-            studyPlansList.style.display = 'none';
-            emptyState.style.display = 'block';
-            updateOverallProgress(0, 0, 0);
-            return;
-        }
-
-        studyPlansList.style.display = 'block';
-        emptyState.style.display = 'none';
-
-        // Fetch progress for each plan
-        const plansWithProgress = await Promise.all(
-            plans.map(async (plan) => {
-                try {
-                    const progress = await apiRequest(`/ai/study-plan/${plan.id}/progress`);
-                    return { ...plan, progress };
-                } catch {
-                    return { ...plan, progress: null };
-                }
-            })
-        );
-
-        // Calculate overall stats
-        let totalChaps = 0;
-        let completedChaps = 0;
-        plansWithProgress.forEach(plan => {
-            if (plan.progress) {
-                totalChaps += plan.progress.total_chapters || 0;
-                completedChaps += plan.progress.completed_chapters || 0;
-            }
-        });
-
-        updateOverallProgress(completedChaps, totalChaps, plans.length);
-        renderStudyPlans(plansWithProgress);
+        productivityScore.textContent = `${score}%`;
+        scoreProgress.style.width = `${score}%`;
+        totalActiveTime.textContent = formatMinutes(data.total_active_minutes || 0);
+        productiveTime.textContent = formatMinutes(data.productive_minutes || 0);
+        distractingTime.textContent = formatMinutes(data.distracting_minutes || 0);
     } catch (error) {
-        console.log('[Popup] Learning data load failed:', error.message);
-        studyPlansList.style.display = 'none';
-        emptyState.style.display = 'block';
+        console.log('[Popup] Productivity data load failed:', error.message);
+        productivityScore.textContent = '—';
     }
-}
-
-function updateOverallProgress(completed, total, planCount) {
-    completedChapters.textContent = completed;
-    totalChapters.textContent = total;
-    studyPlansCount.textContent = planCount;
-    
-    const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
-    todayPercentage.textContent = `${percentage}%`;
-    todayProgress.style.width = `${percentage}%`;
-}
-
-function renderStudyPlans(plans) {
-    if (!plans || plans.length === 0) {
-        studyPlansList.innerHTML = '';
-        return;
-    }
-
-    studyPlansList.innerHTML = plans.map(plan => {
-        const chapters = plan.plan_data?.chapters || [];
-        const progress = plan.progress;
-        const completed = progress?.completed_chapters || 0;
-        const total = progress?.total_chapters || chapters.length;
-        const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
-        const quizUnlocked = plan.quiz_unlocked || false;
-
-        return `
-            <div class="study-plan-card">
-                <div class="plan-header">
-                    <h4 class="plan-title">${plan.title || plan.goal}</h4>
-                    <span class="plan-days">${plan.duration_days}d</span>
-                </div>
-                
-                <div class="plan-progress">
-                    <div class="progress-info">
-                        <span class="progress-text">${completed}/${total} chapters</span>
-                        <span class="progress-percent">${percentage}%</span>
-                    </div>
-                    <div class="progress-bar-small">
-                        <div class="progress-fill-small" style="width: ${percentage}%"></div>
-                    </div>
-                </div>
-
-                ${chapters.length > 0 ? `
-                    <div class="chapters-list">
-                        ${chapters.slice(0, 3).map((chapter, idx) => {
-                            const chapterProgress = progress?.chapters?.find(c => c.chapter_index === chapter.chapter_number);
-                            const isCompleted = chapterProgress?.is_completed || false;
-                            const watchProgress = chapterProgress?.progress_percentage || 0;
-                            const watchedSeconds = chapterProgress?.watched_seconds || 0;
-                            const videoDuration = chapterProgress?.video_duration_seconds || 0;
-                            const hasVideo = videoDuration > 0;
-                            
-                            return `
-                                <div class="chapter-item ${isCompleted ? 'completed' : ''}">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                                        <div style="display: flex; align-items: center; gap: 12px;">
-                                            <span style="font-size: 16px; opacity: ${isCompleted ? '1' : '0.2'};">${isCompleted ? '✓' : '○'}</span>
-                                            <span class="chapter-name" style="font-weight: ${isCompleted ? '600' : '400'};">${chapter.title}</span>
-                                        </div>
-                                        ${hasVideo ? `<span style="font-size: 9px; opacity: 0.5; font-weight: 700;">${Math.round(watchProgress)}%</span>` : ''}
-                                    </div>
-                                    ${hasVideo ? `
-                                        <div style="width: 100%; height: 2px; background: rgba(255, 255, 255, 0.05); border-radius: 1px; overflow: hidden; margin-top: 4px;">
-                                            <div style="width: ${watchProgress}%; height: 100%; background: #ffffff; transition: width 0.3s ease;"></div>
-                                        </div>
-                                    ` : ''}
-                                </div>
-                            `;
-                        }).join('')}
-                        ${chapters.length > 3 ? `<div class="chapters-more" style="font-size: 10px; color: var(--text-secondary); margin-top: 12px; font-weight: 600;">+${chapters.length - 3} MORE</div>` : ''}
-                    </div>
-                ` : ''}
-
-                ${quizUnlocked ? `
-                    <div class="quiz-badge" style="display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);">
-                        <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em;">Quiz Unlocked!</span>
-                    </div>
-                ` : ''}
-
-                <a href="http://127.0.0.1:5173/learning" target="_blank" class="plan-link">
-                    View Full Plan
-                </a>
-            </div>
-        `;
-    }).join('');
 }
 
 
@@ -325,13 +180,13 @@ async function refreshTrackingStatus() {
             wsStatus.style.opacity = d.wsConnected ? '1' : '0.4';
             statusDot.className = `status-indicator ${d.wsConnected ? 'connected' : 'disconnected'}`;
 
-            // Update Block Button (only if tracking tab is visible)
-            if (d.domain && trackingTab.classList.contains('active')) {
+            // Update Block Button
+            if (d.domain) {
                 const blockedMap = await new Promise(r => chrome.storage.local.get('blocking_rules_map', (res) => r(res.blocking_rules_map || {})));
                 const isBlocked = !!blockedMap[d.domain];
                 blockBtn.textContent = isBlocked ? 'Unblock Site' : 'Block This Site';
                 blockBtn.style.display = 'block';
-            } else if (trackingTab.classList.contains('active')) {
+            } else {
                 blockBtn.style.display = 'none';
             }
         }
@@ -363,7 +218,8 @@ blockBtn.addEventListener('click', async () => {
 // Refresh button
 refreshBtn.addEventListener('click', () => {
     refreshBtn.style.animation = 'spin 0.5s linear';
-    loadLearningData();
+    loadProductivityData();
+    refreshTrackingStatus();
     setTimeout(() => {
         refreshBtn.style.animation = '';
     }, 500);
@@ -377,7 +233,7 @@ async function init() {
     if (result.auth_token && result.user_data) {
         authToken = result.auth_token;
         showDashboard(result.user_data);
-        loadLearningData();
+        loadProductivityData();
         refreshTrackingStatus();
     } else {
         showAuth();
@@ -389,13 +245,51 @@ init();
 // Auto-refresh tracking status every 3 seconds for real-time updates
 setInterval(() => {
     if (authToken) {
-        refreshTrackingStatus(); // Always refresh tracking status for live updates
+        refreshTrackingStatus();
     }
 }, 3000);
 
-// Auto-refresh learning data every 30 seconds (only when tab is active)
+// Auto-refresh productivity data every 30 seconds
 setInterval(() => {
-    if (authToken && learningTab.classList.contains('active')) {
-        loadLearningData();
+    if (authToken) {
+        loadProductivityData();
     }
 }, 30000);
+
+
+// ═══════════════════════════════════════════════════════════
+//  [V2+] LEARNING TAB — Uncomment when study plans are enabled
+// ═══════════════════════════════════════════════════════════
+//
+// // Tab Navigation
+// const tabBtns = document.querySelectorAll('.tab-btn');
+// const learningTab = document.getElementById('learningTab');
+// const trackingTab = document.getElementById('trackingTab');
+// const studyPlansList = document.getElementById('studyPlansList');
+// const emptyState = document.getElementById('emptyState');
+// const todayPercentage = document.getElementById('todayPercentage');
+// const todayProgress = document.getElementById('todayProgress');
+// const completedChapters = document.getElementById('completedChapters');
+// const totalChapters = document.getElementById('totalChapters');
+// const studyPlansCount = document.getElementById('studyPlansCount');
+//
+// tabBtns.forEach(btn => {
+//     btn.addEventListener('click', () => {
+//         const tabName = btn.dataset.tab;
+//         tabBtns.forEach(b => b.classList.remove('active'));
+//         btn.classList.add('active');
+//         learningTab.classList.remove('active');
+//         trackingTab.classList.remove('active');
+//         if (tabName === 'learning') {
+//             learningTab.classList.add('active');
+//         } else if (tabName === 'tracking') {
+//             trackingTab.classList.add('active');
+//             refreshTrackingStatus();
+//         }
+//     });
+// });
+//
+// async function loadLearningData() { /* ... */ }
+// function updateOverallProgress(completed, total, planCount) { /* ... */ }
+// function renderStudyPlans(plans) { /* ... */ }
+

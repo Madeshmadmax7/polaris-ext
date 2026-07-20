@@ -22,9 +22,10 @@ import { blockDomain, unblockDomain, syncBlockedDomains } from '../blocking/dyna
 //  SIDEBAR PANEL
 // ═══════════════════════════════════════════════════════════
 
-chrome.action.onClicked.addListener((tab) => {
-    chrome.sidePanel.open({ windowId: tab.windowId });
-});
+// [V2+] Side panel — uncomment when sidePanel is re-enabled in manifest
+// chrome.action.onClicked.addListener((tab) => {
+//     chrome.sidePanel.open({ windowId: tab.windowId });
+// });
 
 
 // ═══════════════════════════════════════════════════════════
@@ -692,6 +693,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     await unblockDomain(message.data.domain);
                     if (activeTabId) {
                         chrome.tabs.sendMessage(activeTabId, { type: 'CHECK_BLOCK' }).catch(() => { });
+                    }
+                    return { ack: true };
+
+                // ═══════════════════════════════════════════════════════
+                //  LCIE: Educational Content Intelligence (plug-in)
+                // ═══════════════════════════════════════════════════════
+                case 'EDUCATIONAL_CONTENT_DETECTED':
+                    // Forward educational content to backend for Knowledge Graph processing.
+                    // Fire-and-forget — never blocks the content script.
+                    if (message.data && sender.tab) {
+                        try {
+                            const { auth_token } = await chrome.storage.local.get('auth_token');
+                            if (!auth_token) return { ack: true, skipped: 'no_auth' };
+
+                            const { lcie_enabled } = await chrome.storage.local.get('lcie_enabled');
+                            if (lcie_enabled === false) return { ack: true, skipped: 'disabled' };
+
+                            // Non-blocking: fire POST and don't await the response
+                            fetch('http://127.0.0.1:8000/api/knowledge/ingest', {
+                                method: 'POST',
+                                headers: {
+                                    'Authorization': `Bearer ${auth_token}`,
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify(message.data)
+                            }).then(r => {
+                                if (r.ok) console.log('[LCIE] ✓ Content ingested by backend');
+                                else console.debug(`[LCIE] Ingest returned ${r.status}`);
+                            }).catch(e => console.debug('[LCIE] Ingest failed:', e.message));
+                        } catch (e) {
+                            console.debug('[LCIE] Handler error:', e.message);
+                        }
                     }
                     return { ack: true };
 
