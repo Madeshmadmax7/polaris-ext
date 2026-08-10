@@ -536,6 +536,18 @@ function initWebSocket() {
                 syncBlockedDomains(message.data.domains || []);
                 break;
 
+            case 'focus_session_start':
+                console.log('[Focus Mode] Session started, enforcing focus rules:', message.data);
+                if (message.data.blocked_domains) {
+                    syncBlockedDomains(message.data.blocked_domains);
+                }
+                break;
+
+            case 'focus_session_stop':
+                console.log('[Focus Mode] Session stopped, restoring default rules:', message.data);
+                syncBlockedDomains(message.data.default_blocked || []);
+                break;
+
             case 'heartbeat_ack':
                 break;
 

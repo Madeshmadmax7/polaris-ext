@@ -282,7 +282,11 @@
         const lowerTitle = title.toLowerCase();
 
         for (const keyword of LEARNING_KEYWORDS) {
-            if (lowerTitle.includes(keyword)) {
+            // Escape keyword for regex to handle terms like c++ or c#
+            const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // Use word boundary-like regex that handles special characters
+            const regex = new RegExp(`(^|[^a-zA-Z0-9])${escaped}([^a-zA-Z0-9]|$)`, 'i');
+            if (regex.test(lowerTitle)) {
                 return 'productive';
             }
         }
